@@ -6,21 +6,21 @@
 /* appearance */
 static const int sloppyfocus               = 1;  /* focus follows mouse */
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
-static const unsigned int borderpx         = 1;  /* border pixel of windows & bar */
+static const unsigned int borderpx         = 5;  /* border pixel of windows */
 static const int showbar                   = 1; /* 0 means no bar */
 static const int topbar                    = 1; /* 0 means bottom bar */
-static const int vertpad                   = 10; /* vertical padding of bar */
-static const int sidepad                   = 10; /* horizontal padding of bar */
-static const char *fonts[]                 = {"monospace:size=10"};
+static const char *fonts[]                 = {"monospace:size=9"};
 static const float rootcolor[]             = COLOR(0x000000ff);
 /* This conforms to the xdg-protocol. Set the alpha to zero to restore the old behavior */
 static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You can also use glsl colors */
+static const char  kblayout_file[] = "/tmp/dwl-keymap";
+static const char *kblayout_cmd[]  = {"pkill", "-RTMIN+3", "someblocks", NULL};
 static uint32_t colors[][3]                = {
 	/*               fg          bg          border    */
 	[SchemeNorm] = { 0xbbbbbbff, 0x222222ff, 0x444444ff },
 	[SchemeSel]  = { 0xeeeeeeff, 0x005577ff, 0x005577ff },
+	[SchemeTagSel] = { 0xffffffff,0x005577ff, 0x005577ff },
 	[SchemeUrg]  = { 0,          0,          0x770000ff },
-	[SchemeBar]  = { 0,          0,          0x557700ff },
 };
 
 /* tagging */
@@ -29,26 +29,52 @@ static char *tags[] = { "1", "2", "3", "4", "5", "6", "7", "8", "9" };
 /* logging */
 static int log_level = WLR_ERROR;
 
-/* Autostart */
-static const char *const autostart[] = {
-        "wbg", "/path/to/your/image", NULL,
-        NULL /* terminate */
-};
+/* nszmak patches */
+static const int gappx = 10;
+static const int smartgaps = 0;
+static const int gaps = 1;
+static const float default_opacity_unfocus = 1.0f;
+static const float default_opacity_focus = 1.0f;
+static const int vertpad = 1;
+static const int sidepad = 1;
+static const char *const autostart[] = { "", NULL};
+static const float tagpad = 0.1;
+
+static const int height_bar = 4;
+static const float bar_opacity = 1.0f;
+
+static const int launcher = 0;
+static const char *launcher_logo = "";
+static const char *launcher_exec[] = { "", NULL };
+
+static const int postlauncher = 1;
+static const char *postlauncher_logo = "";
+static const char *postlauncher_exec[] = {"", NULL};
+
+static const int postbutton1 = 1;
+static const char *postbutton1_logo = "";
+static const char *postbutton1_exec[] = {"", NULL};
+
+static const int postbutton2 = 0;
+static const char *postbutton2_logo = "";
+static const char *postbutton2_exec[] = {"", NULL};
+
+#define KEYBOARD_LAYOUT "us,ru"
+#define KEYBOARD_OPTIONS "grp:win_space_toggle"
 
 static const Rule rules[] = {
 	/* app_id             title       tags mask     isfloating   monitor */
-	{ "Gimp_EXAMPLE",     NULL,       0,            1,           -1 }, /* Start on currently visible tags floating, not tiled */
-	{ "firefox_EXAMPLE",  NULL,       1 << 8,       0,           -1 }, /* Start on ONLY tag "9" */
+	{ "Gimp_EXAMPLE",     NULL,       0,            1,           1.00,         0.20,           -1 },
+	{ "firefox_EXAMPLE",  NULL,       1 << 8,       0,           1.00,         1.00,           -1 },
     /* default/example rule: can be changed but cannot be eliminated; at least one rule must exist */
 };
 
 /* layout(s) */
 static const Layout layouts[] = {
 	/* symbol     arrange function */
-	{ "[]=",      tile },
-	{ "><>",      NULL },    /* no layout function means floating behavior */
-	{ "[M]",      monocle },
-	{ "[\\]",     dwindle },
+	{ "[ dwindle ]",      dwindle },
+	{ "[ float ]",      NULL },    /* no layout function means floating behavior */
+	{ "[ monocle ]",      monocle },
 };
 
 /* monitors */
@@ -64,15 +90,13 @@ static const MonitorRule monrules[] = {
 };
 
 /* keyboard */
-static const struct xkb_rule_names xkb_rules[] = {
-	{
-		.layout = "us",
-	},
-	/*{
-		.layout = "us",
-		.variant = "dvp",
-		.options = "compose:102,numpad:shift3,kpdl:semi,keypad:atm,caps:super"
-	}*/
+static const struct xkb_rule_names xkb_rules = {
+	/* can specify fields: rules, model, layout, variant, options */
+	/* example:
+	.options = "ctrl:nocaps",
+	*/
+	.layout = "us,ru",
+	.options = "grp:win_space_toggle",
 };
 
 static const int repeat_rate = 25;
@@ -134,39 +158,51 @@ static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TA
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
 
 /* commands */
-static const char *termcmd[] = { "alacritty", NULL };
+static const char *termcmd[] = { "foot", NULL };
 static const char *menucmd[] = { "wmenu-run", NULL };
+static const char *fmcmd[] = { "nemo", NULL };
 
 static const Key keys[] = {
 	/* Note that Shift changes certain key codes: 2 -> at, etc. */
 	/* modifier                  key                  function          argument */
-	{ MODKEY,                    XKB_KEY_p,           spawn,            {.v = menucmd} },
+	{ MODKEY,                    XKB_KEY_r,           spawn,            {.v = menucmd} },
+	{ MODKEY,                    XKB_KEY_e,           spawn,            {.v = fmcmd} },
 	{ MODKEY,				     XKB_KEY_t,      	  spawn,            {.v = termcmd} },
+	//{ MODKEY,					 XKB_KEY_space 		  incxkbrules, 		{ .i = +1 } },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Left,        movefloating,       {.ui = 0} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Right,       movefloating,       {.ui = 1} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Up,          movefloating,       {.ui = 2} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Down,        movefloating,       {.ui = 3} },
+	{ MODKEY,  					 XKB_KEY_Left,        focusdir,       {.ui = 0} },
+	{ MODKEY,  				     XKB_KEY_Right,       focusdir,       {.ui = 1} },
+	{ MODKEY,  					 XKB_KEY_Up,          focusdir,       {.ui = 2} },
+	{ MODKEY,  					 XKB_KEY_Down,        focusdir,       {.ui = 3} },
 	{ MODKEY,                    XKB_KEY_j,           focusstack,       {.i = +1} },
 	{ MODKEY,                    XKB_KEY_k,           focusstack,       {.i = -1} },
 	{ MODKEY,                    XKB_KEY_i,           incnmaster,       {.i = +1} },
 	{ MODKEY,                    XKB_KEY_d,           incnmaster,       {.i = -1} },
-	{ MODKEY,                    XKB_KEY_g,           togglegaps,       {0} },
+	{ MODKEY,                    XKB_KEY_g,           togglegaps,     {0} },
 	{ MODKEY,                    XKB_KEY_h,           setmfact,         {.f = -0.05f} },
 	{ MODKEY,                    XKB_KEY_l,           setmfact,         {.f = +0.05f} },
 	{ MODKEY,                    XKB_KEY_Return,      zoom,             {0} },
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_c,           killclient,       {0} },
-	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[0]} },
+	{ MODKEY, 				     XKB_KEY_q,           killclient,       {0} },
+	{ MODKEY,                    XKB_KEY_a,           setlayout,        {.v = &layouts[0]} },
 	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[1]} },
 	{ MODKEY,                    XKB_KEY_m,           setlayout,        {.v = &layouts[2]} },
-	{ MODKEY,                    XKB_KEY_r,           setlayout,        {.v = &layouts[3]} },
-	{ MODKEY,                    XKB_KEY_space,       setlayout,        {0} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_space,       togglefloating,   {0} },
-	{ MODKEY,                    XKB_KEY_e,           togglefullscreen, {0} },
+	{ MODKEY,                    XKB_KEY_z,           setlayout,        {0} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_z,	         togglefloating,   {0} },
+	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_k,          setopacityunfocus, {.f = +0.1f} },
+	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_j,          setopacityunfocus, {.f = -0.1f} },
+	{ MODKEY|WLR_MODIFIER_CTRL|WLR_MODIFIER_SHIFT, XKB_KEY_K, setopacityfocus, {.f = +0.1f} },
+	{ MODKEY|WLR_MODIFIER_CTRL|WLR_MODIFIER_SHIFT, XKB_KEY_J, setopacityfocus, {.f = -0.1f} },
+	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_f,           togglefullscreen, {0} },
 	{ MODKEY,                    XKB_KEY_0,           view,             {.ui = ~0} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_parenright,  tag,              {.ui = ~0} },
 	{ MODKEY,                    XKB_KEY_comma,       focusmon,         {.i = WLR_DIRECTION_LEFT} },
 	{ MODKEY,                    XKB_KEY_period,      focusmon,         {.i = WLR_DIRECTION_RIGHT} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_less,        tagmon,           {.i = WLR_DIRECTION_LEFT} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_greater,     tagmon,           {.i = WLR_DIRECTION_RIGHT} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_A,          incxkbrules,    {.i = +1} },
-	/*{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_E,          setxkbrules,    {.i = +1} },*/
 	TAGKEYS(          XKB_KEY_1, XKB_KEY_exclam,                        0),
 	TAGKEYS(          XKB_KEY_2, XKB_KEY_at,                            1),
 	TAGKEYS(          XKB_KEY_3, XKB_KEY_numbersign,                    2),
