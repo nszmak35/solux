@@ -6,6 +6,14 @@
  */
 
 /* Leave these functions first; they're used in the others */
+#ifndef XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION
+#define XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION 4
+#endif
+
+#ifndef XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION
+#define XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION 6
+#endif
+
 static inline int
 client_is_x11(Client *c)
 {
@@ -94,9 +102,12 @@ client_activate_surface(struct wlr_surface *s, int activated)
 {
 	struct wlr_xdg_toplevel *toplevel;
 #ifdef XWAYLAND
-	struct wlr_xwayland_surface *xsurface;
-	if ((xsurface = wlr_xwayland_surface_try_from_wlr_surface(s))) {
-		wlr_xwayland_surface_activate(xsurface, activated);
+	struct wlr_xwayland_surface *surface;
+	if ((surface = wlr_xwayland_surface_try_from_wlr_surface(s))) {
+		if (activated && surface->minimized)
+			wlr_xwayland_surface_set_minimized(surface, false);
+
+		wlr_xwayland_surface_activate(surface, activated);
 		return;
 	}
 #endif

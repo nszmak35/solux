@@ -12,12 +12,12 @@ DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
-PKGS      = wayland-server xkbcommon libinput $(XLIBS)
+PKGS      = wayland-server xkbcommon libinput pixman-1 fcft $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
-all: dwl
-dwl: dwl.o util.o
+all: solux
+solux: dwl.o util.o
 	$(CC) dwl.o util.o $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 dwl.o: dwl.c client.h config.h config.mk cursor-shape-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
@@ -45,6 +45,9 @@ wlr-output-power-management-unstable-v1-protocol.h:
 xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
+wlr-foreign-toplevel-management-unstable-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		protocols/wlr-foreign-toplevel-management-unstable-v1.xml $@
 
 config.h:
 	cp config.def.h $@
@@ -59,20 +62,21 @@ dist: clean
 	tar -caf dwl-$(VERSION).tar.gz dwl-$(VERSION)
 	rm -rf dwl-$(VERSION)
 
-install: dwl
+install: solux
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl
-	cp -f dwl $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/dwl
+	rm -f $(DESTDIR)$(PREFIX)/bin/solux
+	cp -f solux $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/solux
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
 	cp -f dwl.1 $(DESTDIR)$(MANDIR)/man1
 	chmod 644 $(DESTDIR)$(MANDIR)/man1/dwl.1
 	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
-	cp -f dwl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
-	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	cp -f solux.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/solux.desktop
+	cp -f solux_start.sh $(DESTDIR)$(PREFIX)/bin
+	chmod +x $(DESTDIR)$(PREFIX)/bin/solux_start.sh
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl $(DESTDIR)$(MANDIR)/man1/dwl.1 \
-		$(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/solux $(DESTDIR)$(MANDIR)/man1/dwl.1 \
+		$(DESTDIR)$(DATADIR)/wayland-sessions/solux.desktop
 
 .SUFFIXES: .c .o
 .c.o:

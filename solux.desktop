@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=solux
+Comment=solux for Wayland
+Exec=/usr/local/bin/solux_start.sh
+Type=Application
