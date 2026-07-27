@@ -1,4 +1,4 @@
-_VERSION = 0.42-nszmak
+_VERSION = 0.44-nszmak
 #VERSION  = `git describe --tags --dirty 2>/dev/null || echo $(_VERSION)`
 VERSION  = $(_VERSION)
 
