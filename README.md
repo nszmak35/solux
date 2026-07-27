@@ -77,7 +77,7 @@ Before building, edit `config.h` to customize keybindings, appearance, layouts, 
 
 Current version:
 
-**0.42-nszmak**
+**0.44-nszmak**
 
 ---
 
