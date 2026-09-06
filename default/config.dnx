@@ -1,0 +1,204 @@
+# ==========================================
+# dnx config for Solux
+# ==========================================
+
+:appearance
+	sloppyfocus: 1
+	bypass_surface_visibility: 0
+	borderpx: 0
+	rootcolor: "0x000000ff"
+	fullscreen_bg: "0.0f, 0.0f, 0.0f, 1.0f"
+	default_opacity_unfocus: 1.0f
+	default_opacity_focus: 1.0f
+
+*tags
+	"1"
+	"2"
+	"3"
+	"4"
+	"5"
+	"6"
+	"7"
+	"8"
+	"9"
+
+:gaps
+	gappx: 10 
+	smartgaps: 0
+	gaps: 1
+
+:border_details
+	urgentcolor: "0xC7AD55ff"
+	bordercolor: "0x59645Dff"
+	focuscolor: "0x9AAFC4ff"
+	borderspx: 2
+	borderepx: 2
+	borderspx_offset: 2
+	borderepx_negative_offset: 0
+	borderscolor: "0x77724Dff"
+	borderecolor: "0x171E19ff"
+	borders_focuscolor: "0xC2B66Aff"
+	borders_urgentcolor: "0xC7AD55ff"
+	bordere_focuscolor: "0x171E19ff"
+	bordere_urgentcolor: "0x171E19ff"
+	border_color_type: "BrdStartEnd"
+	borders_only_floating: 0
+
+%autostart
+	"echo", "example_autostart"
+
+:input
+	modkey: "super"
+	keyboard_layout: "us,ru"
+	keyboard_options: "grp:win_space_toggle"
+	repeat_rate: 25
+	repeat_delay: 600
+	tap_to_click: 
+	tap_and_drag: 1
+	drag_lock: 1
+	natural_scrolling: 0
+	disable_while_typing: 1
+	left_handed: 0
+	middle_button_emulation: 0
+	scroll_method: "LIBINPUT_CONFIG_SCROLL_2FG"
+	click_method: "LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS"
+	send_events_mode: "LIBINPUT_CONFIG_SEND_EVENTS_ENABLED"
+	accel_profile: "LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE"
+	accel_speed: 0.0
+	button_map: "LIBINPUT_CONFIG_TAP_MAP_LRM"
+
+# app_id, title, tags mask, isfloating, opacity_focus, opacity_unfocus, monitor
+%rules
+	"Gimp_EXAMPLE", "NULL", 0, 1, 1.00, 0.20, -1
+	"firefox_EXAMPLE", "NULL", 256, 0, 1.00, 1.00, -1
+
+# name, mfact, nmaster, scale, layout, transform, x, y
+# Add as many monitor rules as needed.
+%monrules
+	"NULL", 0.5, 1, 1, "dwindle", "WL_OUTPUT_TRANSFORM_NORMAL", -1, -1
+
+*termcmd
+	"foot"
+
+*menucmd
+	"wmenu-run"
+
+*fmcmd
+	"nemo"
+
+# ==========================================
+# Layouts 
+# name | layout
+# ==========================================
+%layouts
+	"dwindle", "dwindle"
+	"R-dwindle", "rightdwindle"
+	"spiral", "spiral"
+	"R-spiral", "rightspiral"
+	"tile", "tile"
+	"R-tile", "righttile"
+	"float", "float"
+	"monocle", "monocle"
+
+# ==========================================
+# Keybindings
+# modifiers | keysym | function | argument | optional arg type
+# ==========================================
+%keys
+	"MODKEY", "r", "spawn", "menucmd"
+	"MODKEY", "e", "spawn", "fmcmd"
+	"MODKEY", "t", "spawn", "termcmd"
+	"MODKEY", "w", "reload_config"
+	"MODKEY|CTRL", "Left", "swapdir", "0", "ui"
+	"MODKEY|CTRL", "Right", "swapdir", "1", "ui"
+	"MODKEY|CTRL", "Up", "swapdir", "2", "ui"
+	"MODKEY|CTRL", "Down", "swapdir", "3", "ui"
+	"MODKEY", "Left", "focusdir", "0", "ui"
+	"MODKEY", "Right", "focusdir", "1", "ui"
+	"MODKEY", "Up", "focusdir", "2", "ui"
+	"MODKEY", "Down", "focusdir", "3", "ui"
+	"MODKEY", "j", "focusstack", "1", "int"
+	"MODKEY", "k", "focusstack", "-1", "int"
+	"MODKEY", "i", "incnmaster", "1", "int"
+	"MODKEY", "d", "incnmaster", "-1", "int"
+	"MODKEY", "g", "togglegaps", "NONE"
+	"MODKEY", "h", "setmfact", "-0.05", "float"
+	"MODKEY", "l", "setmfact", "0.05", "float"
+	"MODKEY", "Return", "zoom", "NONE"
+	"MODKEY", "Tab", "view", "0", "ui"
+	"MODKEY", "q", "killclient", "NONE"
+	"MODKEY", "a", "setlayout", "0"
+	"MODKEY", "f", "setlayout", "1"
+	"MODKEY", "m", "setlayout", "3"
+	"MODKEY", "z", "cyclelayout", "1", "int"
+	"MODKEY|SHIFT", "z", "togglefloating", "NONE"
+	"MODKEY|CTRL", "k", "setopacityunfocus", "0.1", "float"
+	"MODKEY|CTRL", "j", "setopacityunfocus", "-0.1", "float"
+	"MODKEY|CTRL|SHIFT", "K", "setopacityfocus", "0.1", "float"
+	"MODKEY|CTRL|SHIFT", "J", "setopacityfocus", "-0.1", "float"
+	"MODKEY|CTRL", "f", "togglefullscreen", "NONE"
+	"MODKEY", "0", "view", "ALL", "ui"
+	"MODKEY|SHIFT", "parenright", "tag", "ALL", "ui"
+	"MODKEY", "comma", "focusmon", "-1", "int"
+	"MODKEY", "period", "focusmon", "1", "int"
+	"MODKEY|SHIFT", "less", "tagmon", "-1", "int"
+	"MODKEY|SHIFT", "greater", "tagmon", "1", "int"
+	"MODKEY|CTRL", "q", "quit", "NONE"
+	"CTRL|ALT", "Terminate_Server", "quit", "NONE"
+	"CTRL|ALT", "XF86Switch_VT_1", "chvt", "1", "ui"
+	"CTRL|ALT", "XF86Switch_VT_2", "chvt", "2", "ui"
+	"CTRL|ALT", "XF86Switch_VT_3", "chvt", "3", "ui"
+	"CTRL|ALT", "XF86Switch_VT_4", "chvt", "4", "ui"
+	"CTRL|ALT", "XF86Switch_VT_5", "chvt", "5", "ui"
+	"CTRL|ALT", "XF86Switch_VT_6", "chvt", "6", "ui"
+	"CTRL|ALT", "XF86Switch_VT_7", "chvt", "7", "ui"
+	"CTRL|ALT", "XF86Switch_VT_8", "chvt", "8", "ui"
+	"CTRL|ALT", "XF86Switch_VT_9", "chvt", "9", "ui"
+	"CTRL|ALT", "XF86Switch_VT_10", "chvt", "10", "ui"
+	"CTRL|ALT", "XF86Switch_VT_11", "chvt", "11", "ui"
+	"CTRL|ALT", "XF86Switch_VT_12", "chvt", "12", "ui"
+
+# Tag bindings: same semantics as the original TAGKEYS macro.
+	"MODKEY", "1", "view", "1", "ui"
+	"MODKEY|CTRL", "1", "toggleview", "1", "ui"
+	"MODKEY|SHIFT", "exclam", "tag", "1", "ui"
+	"MODKEY|CTRL|SHIFT", "exclam", "toggletag", "1", "ui"
+	"MODKEY", "2", "view", "2", "ui"
+	"MODKEY|CTRL", "2", "toggleview", "2", "ui"
+	"MODKEY|SHIFT", "at", "tag", "2", "ui"
+	"MODKEY|CTRL|SHIFT", "at", "toggletag", "2", "ui"
+	"MODKEY", "3", "view", "4", "ui"
+	"MODKEY|CTRL", "3", "toggleview", "4", "ui"
+	"MODKEY|SHIFT", "numbersign", "tag", "4", "ui"
+	"MODKEY|CTRL|SHIFT", "numbersign", "toggletag", "4", "ui"
+	"MODKEY", "4", "view", "8", "ui"
+	"MODKEY|CTRL", "4", "toggleview", "8", "ui"
+	"MODKEY|SHIFT", "dollar", "tag", "8", "ui"
+	"MODKEY|CTRL|SHIFT", "dollar", "toggletag", "8", "ui"
+	"MODKEY", "5", "view", "16", "ui"
+	"MODKEY|CTRL", "5", "toggleview", "16", "ui"
+	"MODKEY|SHIFT", "percent", "tag", "16", "ui"
+	"MODKEY|CTRL|SHIFT", "percent", "toggletag", "16", "ui"
+	"MODKEY", "6", "view", "32", "ui"
+	"MODKEY|CTRL", "6", "toggleview", "32", "ui"
+	"MODKEY|SHIFT", "asciicircum", "tag", "32", "ui"
+	"MODKEY|CTRL|SHIFT", "asciicircum", "toggletag", "32", "ui"
+	"MODKEY", "7", "view", "64", "ui"
+	"MODKEY|CTRL", "7", "toggleview", "64", "ui"
+	"MODKEY|SHIFT", "ampersand", "tag", "64", "ui"
+	"MODKEY|CTRL|SHIFT", "ampersand", "toggletag", "64", "ui"
+	"MODKEY", "8", "view", "128", "ui"
+	"MODKEY|CTRL", "8", "toggleview", "128", "ui"
+	"MODKEY|SHIFT", "asterisk", "tag", "128", "ui"
+	"MODKEY|CTRL|SHIFT", "asterisk", "toggletag", "128", "ui"
+	"MODKEY", "9", "view", "256", "ui"
+	"MODKEY|CTRL", "9", "toggleview", "256", "ui"
+	"MODKEY|SHIFT", "parenleft", "tag", "256", "ui"
+	"MODKEY|CTRL|SHIFT", "parenleft", "toggletag", "256", "ui"
+
+# ==========================================
+# Mouse buttons
+# ==========================================
+%buttons
+	"ClkClient", "MODKEY", "BTN_LEFT", "moveresize", "2"
+	"ClkClient", "MODKEY", "BTN_RIGHT", "moveresize", "3"

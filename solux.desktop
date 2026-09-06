@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=solux
+Comment=solux for Wayland
+Exec=dbus-run-session solux
+Type=Application
