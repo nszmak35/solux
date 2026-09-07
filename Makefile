@@ -10,7 +10,7 @@ DWLDEVCFLAGS = -g -Wpedantic -w -Wall -Wextra -Wdeclaration-after-statement \
 	-Werror=implicit -Werror=return-type -Werror=incompatible-pointer-types \
 	-Wfloat-conversion
 
-PKGS      = wayland-server xkbcommon libinput pixman-1 fcft $(XLIBS)
+PKGS      = wayland-server xkbcommon libinput pixman-1 $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
