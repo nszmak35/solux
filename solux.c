@@ -130,6 +130,7 @@ typedef struct {
 	unsigned int click;
 	unsigned int mod;
 	unsigned int button;
+	int scroll;
 	void (*func)(const Arg *);
 	Arg arg;
 } Button;
@@ -557,6 +558,7 @@ static Monitor *selmon;
 static uint32_t swipe_fingers;
 static double swipe_dx;
 static double swipe_dy;
+static double scroll_accum;
 
 /* global event handlers */
 static struct wl_listener cursor_axis = {.notify = axisnotify};
@@ -1334,24 +1336,87 @@ buttonpress(struct wl_listener *listener, void *data)
 void
 axisnotify(struct wl_listener *listener, void *data)
 {
-	/* This event is forwarded by the cursor when a pointer emits an axis event,
-	 * for example when you move the scroll wheel. */
 	struct wlr_pointer_axis_event *event = data;
+	Client *c = NULL;
+	unsigned int click = ClkRoot;
+	uint32_t mods;
+	struct wlr_keyboard *keyboard;
+	Button *b;
+	double delta;
+	int direction;
+
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
-	/* TODO: allow usage of scroll wheel for mousebindings, it can be implemented
-	 * by checking the event's orientation and the delta of the event */
-	/* Notify the client with pointer focus of the axis event. */
+
+	if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL && !locked) {
+		xytonode(cursor->x, cursor->y, NULL, &c, NULL, NULL, NULL);
+		if (c)
+			click = ClkClient;
+
+		keyboard = wlr_seat_get_keyboard(seat);
+		mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+
+		delta = event->delta;
+		if (event->delta_discrete)
+			delta = event->delta_discrete;
+
+		if (event->delta_discrete) {
+			direction = delta < 0 ? 1 : -1;
+		} else {
+			scroll_accum += delta;
+			if (scroll_accum <= -10.0) {
+				direction = 1;
+				scroll_accum = 0;
+			} else if (scroll_accum >= 10.0) {
+				direction = -1;
+				scroll_accum = 0;
+			} else {
+				goto forward_axis;
+			}
+		}
+
+		/* Prefer an exact click target first. If a scroll binding is declared
+		 * for ClkClient and the pointer is over empty space, allow it as a
+		 * fallback so tag cycling does not stop on an empty tag. */
+		for (b = buttons; b < buttons + buttons_len; b++) {
+			uint32_t want = b->mod;
+
+			if (!b->scroll || b->click != click)
+				continue;
+
+			if (want & MODKEY)
+				want = (want & ~MODKEY) | runtime_modkey;
+
+			if (CLEANMASK(mods) == CLEANMASK(want) &&
+				b->scroll == direction && b->func) {
+				b->func(&b->arg);
+				return;
+			}
+		}
+
+		if (click == ClkRoot) {
+			for (b = buttons; b < buttons + buttons_len; b++) {
+				uint32_t want = b->mod;
+
+				if (!b->scroll || b->click != ClkClient)
+					continue;
+
+				if (want & MODKEY)
+					want = (want & ~MODKEY) | runtime_modkey;
+
+				if (CLEANMASK(mods) == CLEANMASK(want) &&
+					b->scroll == direction && b->func) {
+					b->func(&b->arg);
+					return;
+				}
+			}
+		}
+	}
+
+forward_axis:
 	wlr_seat_pointer_notify_axis(seat,
 			event->time_msec, event->orientation, event->delta,
 			event->delta_discrete, event->source, event->relative_direction);
 }
-
-
-
-
-
-
-
 
 void
 chvt(const Arg *arg)
@@ -2081,8 +2146,8 @@ cyclelayout(const Arg *arg)
 void
 cycletag(const Arg *arg)
 {
-	unsigned int tagset, current, next;
-	int dir;
+	unsigned int tagset, current;
+	int dir, next;
 
 	if (!selmon)
 		return;
@@ -2091,11 +2156,6 @@ cycletag(const Arg *arg)
 	if (!tagset)
 		return;
 
-	/*
-	 * Like cyclelayout(), use the supplied integer as the direction:
-	 * +1 moves forward and -1 moves backward.  If several tags are
-	 * currently selected, cycle from the first selected tag.
-	 */
 	for (current = 0; current < TAGCOUNT; current++) {
 		if (tagset & (1u << current))
 			break;
@@ -2105,7 +2165,12 @@ cycletag(const Arg *arg)
 		return;
 
 	dir = (arg && arg->i) ? arg->i : 1;
-	next = (current + dir + TAGCOUNT) % TAGCOUNT;
+	next = (int)current + dir;
+
+	if (next < 0)
+		next = (int)TAGCOUNT - 1;
+	else if (next >= (int)TAGCOUNT)
+		next = 0;
 
 	view(&(const Arg){ .ui = 1u << next });
 }
@@ -5173,6 +5238,8 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			if (!strcasecmp(e->items[2], "BTN_LEFT")) buttons[dnx_buttons_n].button = BTN_LEFT;
 			else if (!strcasecmp(e->items[2], "BTN_RIGHT")) buttons[dnx_buttons_n].button = BTN_RIGHT;
 			else if (!strcasecmp(e->items[2], "BTN_MIDDLE")) buttons[dnx_buttons_n].button = BTN_MIDDLE;
+			else if (!strcasecmp(e->items[2], "SCROLL_UP")) buttons[dnx_buttons_n].scroll = 1;
+			else if (!strcasecmp(e->items[2], "SCROLL_DOWN")) buttons[dnx_buttons_n].scroll = -1;
 			else buttons[dnx_buttons_n].button = (unsigned)strtoul(e->items[2], NULL, 0);
 
 			if (!strcasecmp(e->items[3], "spawn")) buttons[dnx_buttons_n].func = spawn;
@@ -5184,6 +5251,7 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			else if (!strcasecmp(e->items[3], "toggleview")) buttons[dnx_buttons_n].func = toggleview;
 			else if (!strcasecmp(e->items[3], "tag")) buttons[dnx_buttons_n].func = tag;
 			else if (!strcasecmp(e->items[3], "toggletag")) buttons[dnx_buttons_n].func = toggletag;
+			else if (!strcasecmp(e->items[3], "cycletag")) buttons[dnx_buttons_n].func = cycletag;
 			else return 0;
 
 			if (e->count >= 5 && !strcasecmp(e->items[3], "spawn"))

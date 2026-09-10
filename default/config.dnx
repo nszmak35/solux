@@ -66,6 +66,7 @@
 	accel_profile: "LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE"
 	accel_speed: 0.0
 	button_map: "LIBINPUT_CONFIG_TAP_MAP_LRM"
+	swipe_min_threshold: 0
 
 # app_id, title, tags mask, isfloating, opacity_focus, opacity_unfocus, monitor
 %rules
@@ -76,6 +77,12 @@
 # Add as many monitor rules as needed.
 %monrules
 	"NULL", 0.5, 1, 1, "dwindle", "WL_OUTPUT_TRANSFORM_NORMAL", -1, -1
+
+%gestures
+	"SWIPE", "down", "3", "cyclelayout", "-1", "int"
+	"SWIPE", "up", "3", "cyclelayout", "1", "int"
+	"SWIPE", "right", "3", "cycletag", "-1", "int"
+	"SWIPE", "left", "3", "cycletag", "1", "int"
 
 *termcmd
 	"foot"
@@ -202,3 +209,5 @@
 %buttons
 	"ClkClient", "MODKEY", "BTN_LEFT", "moveresize", "2"
 	"ClkClient", "MODKEY", "BTN_RIGHT", "moveresize", "3"
+	"ClkClient", "MODKEY", "SCROLL_UP", "cycletag", "-1", "int"
+	"ClkClient", "MODKEY", "SCROLL_DOWN", "cycletag", "1", "int"
