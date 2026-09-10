@@ -53,6 +53,7 @@
 #include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_output_power_management_v1.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_pointer_gestures_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_presentation_time.h>
 #include <wlr/types/wlr_primary_selection.h>
@@ -116,6 +117,7 @@ enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
 enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 enum { ClkClient, ClkRoot }; /* clicks */
+enum { SWIPE_LEFT, SWIPE_RIGHT, SWIPE_DOWN, SWIPE_UP };
 
 typedef union {
 	int i;
@@ -131,6 +133,21 @@ typedef struct {
 	void (*func)(const Arg *);
 	Arg arg;
 } Button;
+
+typedef struct {
+	unsigned int mod;
+	unsigned int motion;
+	unsigned int fingers_count;
+	void (*func)(const Arg *);
+	Arg arg;
+} Gesture;
+
+typedef struct PointerDevice PointerDevice;
+struct PointerDevice {
+	struct wl_list link;
+	struct wlr_pointer *pointer;
+	struct wl_listener destroy;
+};
 
 typedef struct Pertag Pertag;
 typedef struct Monitor Monitor;
@@ -319,6 +336,13 @@ static void assignkeymap(struct wlr_keyboard *keyboard);
 static void axisnotify(struct wl_listener *listener, void *data);
 static void autostartexec(void);
 static void buttonpress(struct wl_listener *listener, void *data);
+static int ongesture(struct wlr_pointer_swipe_end_event *event);
+static void swipe_begin(struct wl_listener *listener, void *data);
+static void swipe_update(struct wl_listener *listener, void *data);
+static void swipe_end(struct wl_listener *listener, void *data);
+static void apply_pointer_config(struct wlr_pointer *pointer);
+static void reapply_pointer_config(void);
+static void destroy_pointer_config(struct wl_listener *listener, void *data);
 static void chvt(const Arg *arg);
 static void checkidleinhibitor(struct wlr_surface *exclude);
 static void cleanup(void);
@@ -347,6 +371,7 @@ static void cursorconstrain(struct wlr_pointer_constraint_v1 *constraint);
 static void cursorframe(struct wl_listener *listener, void *data);
 static void cursorwarptohint(void);
 static void cyclelayout(const Arg *arg);
+static void cycletag(const Arg *arg);
 static void reload_config(const Arg *arg);
 static void apply_monitor_rule(Monitor *m);
 static void apply_runtime_modkey(void);
@@ -507,6 +532,8 @@ static struct wlr_pointer_constraint_v1 *active_constraint;
 
 static struct wlr_cursor *cursor;
 static struct wlr_xcursor_manager *cursor_mgr;
+static struct wlr_pointer_gestures_v1 *pointer_gestures;
+static struct wl_list pointer_devices;
 
 static struct wlr_scene_rect *root_bg;
 static struct wlr_session_lock_manager_v1 *session_lock_mgr;
@@ -527,7 +554,9 @@ static struct wlr_box sgeom;
 static struct wl_list mons;
 static Monitor *selmon;
 
-
+static uint32_t swipe_fingers;
+static double swipe_dx;
+static double swipe_dy;
 
 /* global event handlers */
 static struct wl_listener cursor_axis = {.notify = axisnotify};
@@ -535,6 +564,9 @@ static struct wl_listener cursor_button = {.notify = buttonpress};
 static struct wl_listener cursor_frame = {.notify = cursorframe};
 static struct wl_listener cursor_motion = {.notify = motionrelative};
 static struct wl_listener cursor_motion_absolute = {.notify = motionabsolute};
+static struct wl_listener cursor_swipe_begin = {.notify = swipe_begin};
+static struct wl_listener cursor_swipe_update = {.notify = swipe_update};
+static struct wl_listener cursor_swipe_end = {.notify = swipe_end};
 static struct wl_listener gpu_reset = {.notify = gpureset};
 static struct wl_listener layout_change = {.notify = updatemons};
 static struct wl_listener new_idle_inhibitor = {.notify = createidleinhibitor};
@@ -702,7 +734,7 @@ static int natural_scrolling = 0;
 static int disable_while_typing = 1;
 static int left_handed = 0;
 static int middle_button_emulation = 0;
-
+static unsigned int swipe_min_threshold = 0;
 
 static enum libinput_config_scroll_method scroll_method = LIBINPUT_CONFIG_SCROLL_2FG;
 
@@ -756,11 +788,6 @@ static char *screen1cmd[33] = { NULL };
 static char *hlcmd[33] = { NULL };
 
 /* Key and button bindings are loaded exclusively from config.dnx. */
-
-
-
-
-
 static Rule *rules;
 static size_t rules_len, rules_cap;
 static MonitorRule *monrules;
@@ -769,6 +796,8 @@ static Key *keys;
 static size_t keys_len, keys_cap;
 static Button *buttons;
 static size_t buttons_len, buttons_cap;
+static Gesture *gestures;
+static size_t gestures_len, gestures_cap;
 
 static void
 dnx_oom(void)
@@ -817,11 +846,13 @@ dnx_init_dynamic_config(void)
 	memcpy(monrules, default_monrules, LENGTH(default_monrules) * sizeof(*monrules));
 	monrules_len = LENGTH(default_monrules);
 
-	/* Keys/buttons come exclusively from config.dnx. */
+	/* Keys/buttons/gestures come exclusively from config.dnx. */
 	keys = NULL;
 	keys_len = keys_cap = 0;
 	buttons = NULL;
 	buttons_len = buttons_cap = 0;
+	gestures = NULL;
+	gestures_len = gestures_cap = 0;
 }
 
 #define TAGCOUNT (tagcount)
@@ -1431,6 +1462,9 @@ cleanuplisteners(void)
 	wl_list_remove(&cursor_frame.link);
 	wl_list_remove(&cursor_motion.link);
 	wl_list_remove(&cursor_motion_absolute.link);
+	wl_list_remove(&cursor_swipe_begin.link);
+	wl_list_remove(&cursor_swipe_update.link);
+	wl_list_remove(&cursor_swipe_end.link);
 	wl_list_remove(&gpu_reset.link);
 	wl_list_remove(&new_idle_inhibitor.link);
 	wl_list_remove(&layout_change.link);
@@ -1886,46 +1920,83 @@ createnotify(struct wl_listener *listener, void *data)
 	LISTEN(&toplevel->events.set_title, &c->set_title, updatetitle);
 }
 
+static void
+apply_pointer_config(struct wlr_pointer *pointer)
+{
+	struct libinput_device *device;
+
+	if (!pointer)
+		return;
+
+	if (!wlr_input_device_is_libinput(&pointer->base)
+			|| !(device = wlr_libinput_get_device_handle(&pointer->base)))
+		return;
+
+	if (libinput_device_config_tap_get_finger_count(device)) {
+		libinput_device_config_tap_set_enabled(device, tap_to_click);
+		libinput_device_config_tap_set_drag_enabled(device, tap_and_drag);
+		libinput_device_config_tap_set_drag_lock_enabled(device, drag_lock);
+		libinput_device_config_tap_set_button_map(device, button_map);
+	}
+
+	if (libinput_device_config_scroll_has_natural_scroll(device))
+		libinput_device_config_scroll_set_natural_scroll_enabled(device, natural_scrolling);
+
+	if (libinput_device_config_dwt_is_available(device))
+		libinput_device_config_dwt_set_enabled(device, disable_while_typing);
+
+	if (libinput_device_config_left_handed_is_available(device))
+		libinput_device_config_left_handed_set(device, left_handed);
+
+	if (libinput_device_config_middle_emulation_is_available(device))
+		libinput_device_config_middle_emulation_set_enabled(device, middle_button_emulation);
+
+	if (libinput_device_config_scroll_get_methods(device) != LIBINPUT_CONFIG_SCROLL_NO_SCROLL)
+		libinput_device_config_scroll_set_method(device, scroll_method);
+
+	if (libinput_device_config_click_get_methods(device) != LIBINPUT_CONFIG_CLICK_METHOD_NONE)
+		libinput_device_config_click_set_method(device, click_method);
+
+	if (libinput_device_config_send_events_get_modes(device))
+		libinput_device_config_send_events_set_mode(device, send_events_mode);
+
+	if (libinput_device_config_accel_is_available(device)) {
+		libinput_device_config_accel_set_profile(device, accel_profile);
+		libinput_device_config_accel_set_speed(device, accel_speed);
+	}
+}
+
+static void
+reapply_pointer_config(void)
+{
+	PointerDevice *pd;
+
+	wl_list_for_each(pd, &pointer_devices, link)
+		apply_pointer_config(pd->pointer);
+}
+
+static void
+destroy_pointer_config(struct wl_listener *listener, void *data)
+{
+	PointerDevice *pd = wl_container_of(listener, pd, destroy);
+
+	(void)data;
+	wl_list_remove(&pd->link);
+	wl_list_remove(&pd->destroy.link);
+	free(pd);
+}
+
 void
 createpointer(struct wlr_pointer *pointer)
 {
-	struct libinput_device *device;
-	if (wlr_input_device_is_libinput(&pointer->base)
-			&& (device = wlr_libinput_get_device_handle(&pointer->base))) {
+	PointerDevice *pd;
 
-		if (libinput_device_config_tap_get_finger_count(device)) {
-			libinput_device_config_tap_set_enabled(device, tap_to_click);
-			libinput_device_config_tap_set_drag_enabled(device, tap_and_drag);
-			libinput_device_config_tap_set_drag_lock_enabled(device, drag_lock);
-			libinput_device_config_tap_set_button_map(device, button_map);
-		}
+	apply_pointer_config(pointer);
 
-		if (libinput_device_config_scroll_has_natural_scroll(device))
-			libinput_device_config_scroll_set_natural_scroll_enabled(device, natural_scrolling);
-
-		if (libinput_device_config_dwt_is_available(device))
-			libinput_device_config_dwt_set_enabled(device, disable_while_typing);
-
-		if (libinput_device_config_left_handed_is_available(device))
-			libinput_device_config_left_handed_set(device, left_handed);
-
-		if (libinput_device_config_middle_emulation_is_available(device))
-			libinput_device_config_middle_emulation_set_enabled(device, middle_button_emulation);
-
-		if (libinput_device_config_scroll_get_methods(device) != LIBINPUT_CONFIG_SCROLL_NO_SCROLL)
-			libinput_device_config_scroll_set_method(device, scroll_method);
-
-		if (libinput_device_config_click_get_methods(device) != LIBINPUT_CONFIG_CLICK_METHOD_NONE)
-			libinput_device_config_click_set_method(device, click_method);
-
-		if (libinput_device_config_send_events_get_modes(device))
-			libinput_device_config_send_events_set_mode(device, send_events_mode);
-
-		if (libinput_device_config_accel_is_available(device)) {
-			libinput_device_config_accel_set_profile(device, accel_profile);
-			libinput_device_config_accel_set_speed(device, accel_speed);
-		}
-	}
+	pd = ecalloc(1, sizeof(*pd));
+	pd->pointer = pointer;
+	LISTEN(&pointer->base.events.destroy, &pd->destroy, destroy_pointer_config);
+	wl_list_insert(&pointer_devices, &pd->link);
 
 	wlr_cursor_attach_input_device(cursor, &pointer->base);
 }
@@ -2005,6 +2076,38 @@ cyclelayout(const Arg *arg)
 
 	 
 	setlayout(&(const Arg){ .v = &layouts[next] });
+}
+
+void
+cycletag(const Arg *arg)
+{
+	unsigned int tagset, current, next;
+	int dir;
+
+	if (!selmon)
+		return;
+
+	tagset = selmon->tagset[selmon->seltags] & TAGMASK;
+	if (!tagset)
+		return;
+
+	/*
+	 * Like cyclelayout(), use the supplied integer as the direction:
+	 * +1 moves forward and -1 moves backward.  If several tags are
+	 * currently selected, cycle from the first selected tag.
+	 */
+	for (current = 0; current < TAGCOUNT; current++) {
+		if (tagset & (1u << current))
+			break;
+	}
+
+	if (current >= TAGCOUNT)
+		return;
+
+	dir = (arg && arg->i) ? arg->i : 1;
+	next = (current + dir + TAGCOUNT) % TAGCOUNT;
+
+	view(&(const Arg){ .ui = 1u << next });
 }
 
 void
@@ -3032,6 +3135,91 @@ incxkbrules(const Arg *arg)
 	/* This path changes the XKB group without a keyboard event. Publish it
 	 * immediately so status consumers see the new layout even on the root. */
 	kblayout(kb_group);
+}
+
+static int
+ongesture(struct wlr_pointer_swipe_end_event *event)
+{
+	struct wlr_keyboard *keyboard;
+	uint32_t mods;
+	Gesture *g;
+	unsigned int motion;
+	unsigned int adx, ady;
+
+	if (event->cancelled)
+		return 0;
+
+	adx = (unsigned int)round(fabs(swipe_dx));
+	ady = (unsigned int)round(fabs(swipe_dy));
+	if ((uint64_t)adx * adx + (uint64_t)ady * ady <
+			(uint64_t)swipe_min_threshold * swipe_min_threshold)
+		return 0;
+
+	if (adx > ady)
+		motion = swipe_dx < 0 ? SWIPE_LEFT : SWIPE_RIGHT;
+	else
+		motion = swipe_dy < 0 ? SWIPE_UP : SWIPE_DOWN;
+
+	keyboard = wlr_seat_get_keyboard(seat);
+	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+
+	for (g = gestures; g < gestures + gestures_len; g++) {
+		uint32_t want = g->mod;
+
+		/* MODKEY is a symbolic modifier. Resolve it exactly like key and
+		 * button bindings, so gestures also work with modkey=alt. */
+		if (want & MODKEY)
+			want = (want & ~MODKEY) | runtime_modkey;
+
+		if (CLEANMASK(mods) == CLEANMASK(want) &&
+			swipe_fingers == g->fingers_count &&
+			motion == g->motion && g->func) {
+			g->func(&g->arg);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static void
+swipe_begin(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_swipe_begin_event *event = data;
+
+	swipe_fingers = event->fingers;
+	swipe_dx = 0;
+	swipe_dy = 0;
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_swipe_begin(
+			pointer_gestures, seat, event->time_msec, event->fingers);
+}
+
+static void
+swipe_update(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_swipe_update_event *event = data;
+
+	swipe_fingers = event->fingers;
+	swipe_dx += event->dx;
+	swipe_dy += event->dy;
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_swipe_update(
+			pointer_gestures, seat, event->time_msec, event->dx, event->dy);
+}
+
+static void
+swipe_end(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_swipe_end_event *event = data;
+
+	ongesture(event);
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_swipe_end(
+			pointer_gestures, seat, event->time_msec, event->cancelled);
 }
 
 void
@@ -4610,6 +4798,7 @@ dnx_load_scalar(const DnxEntry *e)
 	else if (!strcasecmp(k, "disable_while_typing")) disable_while_typing = dnx_bool_value(v, disable_while_typing);
 	else if (!strcasecmp(k, "left_handed")) left_handed = dnx_bool_value(v, left_handed);
 	else if (!strcasecmp(k, "middle_button_emulation")) middle_button_emulation = dnx_bool_value(v, middle_button_emulation);
+	else if (!strcasecmp(k, "swipe_min_threshold")) swipe_min_threshold = (unsigned int)strtoul(v, NULL, 0);
 	else if (!strcasecmp(k, "scroll_method")) {
 		if (!strcasecmp(v, "LIBINPUT_CONFIG_SCROLL_NO_SCROLL")) scroll_method=LIBINPUT_CONFIG_SCROLL_NO_SCROLL;
 		else if (!strcasecmp(v, "LIBINPUT_CONFIG_SCROLL_2FG")) scroll_method=LIBINPUT_CONFIG_SCROLL_2FG;
@@ -4734,9 +4923,9 @@ dnx_autostart_clear(void)
 static size_t dnx_tag_n;
 static size_t dnx_cmd_n[8];
 static int dnx_user_list_started[8];
-static int dnx_user_table_started[5];
+static int dnx_user_table_started[6];
 static int dnx_user_autostart_started;
-static size_t dnx_rules_n, dnx_layouts_n, dnx_monrules_n, dnx_keys_n, dnx_buttons_n;
+static size_t dnx_rules_n, dnx_layouts_n, dnx_monrules_n, dnx_keys_n, dnx_buttons_n, dnx_gestures_n;
 
 static void
 dnx_reset_parser_state(void)
@@ -4746,7 +4935,7 @@ dnx_reset_parser_state(void)
 	memset(dnx_user_list_started, 0, sizeof(dnx_user_list_started));
 	memset(dnx_user_table_started, 0, sizeof(dnx_user_table_started));
 	dnx_user_autostart_started = 0;
-	dnx_rules_n = dnx_layouts_n = dnx_monrules_n = dnx_keys_n = dnx_buttons_n = 0;
+	dnx_rules_n = dnx_layouts_n = dnx_monrules_n = dnx_keys_n = dnx_buttons_n = dnx_gestures_n = 0;
 }
 
 static int
@@ -4913,6 +5102,7 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			else if (!strcasecmp(e->items[2], "focusmon")) keys[dnx_keys_n].func = focusmon;
 			else if (!strcasecmp(e->items[2], "tagmon")) keys[dnx_keys_n].func = tagmon;
 			else if (!strcasecmp(e->items[2], "cyclelayout")) keys[dnx_keys_n].func = cyclelayout;
+			else if (!strcasecmp(e->items[2], "cycletag")) keys[dnx_keys_n].func = cycletag;
 			else if (!strcasecmp(e->items[2], "togglefloating")) keys[dnx_keys_n].func = togglefloating;
 			else if (!strcasecmp(e->items[2], "togglefullscreen")) keys[dnx_keys_n].func = togglefullscreen;
 			else if (!strcasecmp(e->items[2], "togglegaps")) keys[dnx_keys_n].func = togglegaps;
@@ -4954,6 +5144,7 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 					!strcasecmp(e->items[2], "incnmaster") ||
 					!strcasecmp(e->items[2], "focusstack") ||
 					!strcasecmp(e->items[2], "cyclelayout") ||
+					!strcasecmp(e->items[2], "cycletag") ||
 					!strcasecmp(e->items[2], "moveresize")) {
 				keys[dnx_keys_n].arg.i = atoi(arg);
 			} else {
@@ -5004,6 +5195,126 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 				buttons[dnx_buttons_n].arg.i = atoi(e->items[4]);
 			}
 			buttons_len = ++dnx_buttons_n;
+		}
+	} else if (!strcasecmp(e->key, "gestures") && e->count >= 4) {
+		/* Gesture entries: type, direction, fingers, action, [argument], [modifier]. */
+		if (e->source == 1 && !dnx_user_table_started[5]) {
+			dnx_gestures_n = 0;
+			gestures_len = 0;
+			dnx_user_table_started[5] = 1;
+		}
+		if (dnx_gestures_n >= gestures_cap)
+			gestures = dnx_realloc_array(gestures, &gestures_cap, dnx_gestures_n + 1, sizeof(*gestures));
+		{
+			Gesture *g = &gestures[dnx_gestures_n];
+			const char *action = e->items[3];
+			const char *arg = e->count >= 5 ? e->items[4] : NULL;
+			const char *mod = e->count >= 6 ? e->items[5] : NULL;
+			memset(g, 0, sizeof(*g));
+
+			if (strcasecmp(e->items[0], "SWIPE"))
+				return 0;
+			if (!strcasecmp(e->items[1], "left"))
+				g->motion = SWIPE_LEFT;
+			else if (!strcasecmp(e->items[1], "right"))
+				g->motion = SWIPE_RIGHT;
+			else if (!strcasecmp(e->items[1], "up"))
+				g->motion = SWIPE_UP;
+			else if (!strcasecmp(e->items[1], "down"))
+				g->motion = SWIPE_DOWN;
+			else
+				return 0;
+
+			g->fingers_count = (unsigned int)strtoul(e->items[2], NULL, 0);
+			g->mod = mod ? dnx_mods(mod) : 0;
+
+			if (!strcasecmp(action, "spawn"))
+				g->func = spawn;
+			else if (!strcasecmp(action, "view"))
+				g->func = view;
+			else if (!strcasecmp(action, "toggleview"))
+				g->func = toggleview;
+			else if (!strcasecmp(action, "tag"))
+				g->func = tag;
+			else if (!strcasecmp(action, "toggletag"))
+				g->func = toggletag;
+			else if (!strcasecmp(action, "setlayout"))
+				g->func = setlayout;
+			else if (!strcasecmp(action, "setmfact"))
+				g->func = setmfact;
+			else if (!strcasecmp(action, "incnmaster"))
+				g->func = incnmaster;
+			else if (!strcasecmp(action, "focusstack"))
+				g->func = focusstack;
+			else if (!strcasecmp(action, "focusdir"))
+				g->func = focusdir;
+			else if (!strcasecmp(action, "swapdir"))
+				g->func = swapdir;
+			else if (!strcasecmp(action, "focusmon"))
+				g->func = focusmon;
+			else if (!strcasecmp(action, "tagmon"))
+				g->func = tagmon;
+			else if (!strcasecmp(action, "cyclelayout"))
+				g->func = cyclelayout;
+			else if (!strcasecmp(action, "cycletag"))
+				g->func = cycletag;
+			else if (!strcasecmp(action, "togglefloating"))
+				g->func = togglefloating;
+			else if (!strcasecmp(action, "togglefullscreen"))
+				g->func = togglefullscreen;
+			else if (!strcasecmp(action, "togglegaps"))
+				g->func = togglegaps;
+			else if (!strcasecmp(action, "setopacityunfocus"))
+				g->func = setopacityunfocus;
+			else if (!strcasecmp(action, "setopacityfocus"))
+				g->func = setopacityfocus;
+			else if (!strcasecmp(action, "killclient"))
+				g->func = killclient;
+			else if (!strcasecmp(action, "zoom"))
+				g->func = zoom;
+			else if (!strcasecmp(action, "quit"))
+				g->func = quit;
+			else if (!strcasecmp(action, "reload_config"))
+				g->func = reload_config;
+			else if (!strcasecmp(action, "chvt"))
+				g->func = chvt;
+			else if (!strcasecmp(action, "moveresize"))
+				g->func = moveresize;
+			else
+				return 0;
+
+			if (!arg || !*arg || !strcasecmp(arg, "NONE")) {
+				g->arg.i = 0;
+			} else if (!strcasecmp(action, "spawn")) {
+				g->arg.v = dnx_command_for_name(arg);
+			} else if (!strcasecmp(action, "setlayout")) {
+				int li = dnx_layout_index(arg);
+				g->arg.v = (li >= 0) ? &layouts[li] : &layouts[0];
+			} else if (!strcasecmp(action, "focusdir") ||
+					!strcasecmp(action, "swapdir") ||
+					!strcasecmp(action, "view") ||
+					!strcasecmp(action, "toggleview") ||
+					!strcasecmp(action, "tag") ||
+					!strcasecmp(action, "toggletag") ||
+					!strcasecmp(action, "chvt")) {
+				g->arg.ui = (!strcasecmp(arg, "~0") || !strcasecmp(arg, "ALL"))
+					? ~0u : (uint32_t)strtoul(arg, NULL, 0);
+			} else if (!strcasecmp(action, "focusmon") ||
+					!strcasecmp(action, "tagmon") ||
+					!strcasecmp(action, "incnmaster") ||
+					!strcasecmp(action, "focusstack") ||
+					!strcasecmp(action, "cyclelayout") ||
+					!strcasecmp(action, "cycletag") ||
+					!strcasecmp(action, "moveresize")) {
+				g->arg.i = atoi(arg);
+			} else if (!strcasecmp(action, "setmfact") ||
+					!strcasecmp(action, "setopacityunfocus") ||
+					!strcasecmp(action, "setopacityfocus")) {
+				g->arg.f = strtof(arg, NULL);
+			} else {
+				g->arg.i = atoi(arg);
+			}
+			gestures_len = ++dnx_gestures_n;
 		}
 	}
 	return 0;
@@ -5214,11 +5525,13 @@ reload_config(const Arg *arg)
 	free(monrules);
 	free(keys);
 	free(buttons);
-	rules = NULL; monrules = NULL; keys = NULL; buttons = NULL;
+	free(gestures);
+	rules = NULL; monrules = NULL; keys = NULL; buttons = NULL; gestures = NULL;
 	rules_len = rules_cap = 0;
 	monrules_len = monrules_cap = 0;
 	keys_len = keys_cap = 0;
 	buttons_len = buttons_cap = 0;
+	gestures_len = gestures_cap = 0;
 
 	/* Reset XKB rules before parsing the new config. Without this, old
 	 * keyboard_options may survive reload and get combined with the new one. */
@@ -5234,6 +5547,24 @@ reload_config(const Arg *arg)
 	memcpy(layouts, default_layouts, sizeof(layouts));
 	memset(layout_symbol_owned, 0, sizeof(layout_symbol_owned));
 	layouts_len = LENGTH(default_layouts);
+
+	/* Reset input defaults so removed values do not survive a config reload. */
+	repeat_rate = 25;
+	repeat_delay = 600;
+	tap_to_click = 1;
+	tap_and_drag = 1;
+	drag_lock = 1;
+	natural_scrolling = 0;
+	disable_while_typing = 1;
+	left_handed = 0;
+	middle_button_emulation = 0;
+	swipe_min_threshold = 0;
+	scroll_method = LIBINPUT_CONFIG_SCROLL_2FG;
+	click_method = LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS;
+	send_events_mode = LIBINPUT_CONFIG_SEND_EVENTS_ENABLED;
+	accel_profile = LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+	accel_speed = 0.0;
+	button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
 	load_dnx_config();
 
@@ -5295,6 +5626,7 @@ reload_config(const Arg *arg)
 	/* Apply modkey and keyboard changes from config.dnx without restarting dwl. */
 	apply_runtime_modkey();
 	reload_runtime_keymap();
+	reapply_pointer_config();
 
 	/*
 	 * A reload may remove or reorder %layouts.  Never leave a monitor or
@@ -5598,6 +5930,7 @@ setup(void)
 	/* Configure a listener to be notified when new outputs are available on the
 	 * backend. */
 	wl_list_init(&mons);
+	wl_list_init(&pointer_devices);
 	wl_signal_add(&backend->events.new_output, &new_output);
 
 	
@@ -5654,6 +5987,9 @@ setup(void)
 	wl_signal_add(&cursor->events.button, &cursor_button);
 	wl_signal_add(&cursor->events.axis, &cursor_axis);
 	wl_signal_add(&cursor->events.frame, &cursor_frame);
+	wl_signal_add(&cursor->events.swipe_begin, &cursor_swipe_begin);
+	wl_signal_add(&cursor->events.swipe_update, &cursor_swipe_update);
+	wl_signal_add(&cursor->events.swipe_end, &cursor_swipe_end);
 
 	cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(dpy, 1);
 	wl_signal_add(&cursor_shape_mgr->events.request_set_shape, &request_set_cursor_shape);
@@ -5669,6 +6005,11 @@ setup(void)
             &new_virtual_pointer);
 
 	seat = wlr_seat_create(dpy, "seat0");
+	if (!seat)
+		die("dwl: could not create seat");
+	pointer_gestures = wlr_pointer_gestures_v1_create(dpy);
+	if (!pointer_gestures)
+		die("dwl: could not create pointer gestures protocol");
 	wl_signal_add(&seat->events.request_set_cursor, &request_cursor);
 	wl_signal_add(&seat->events.request_set_selection, &request_set_sel);
 	wl_signal_add(&seat->events.request_set_primary_selection, &request_set_psel);
