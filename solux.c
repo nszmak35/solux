@@ -117,7 +117,7 @@ enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
 enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
 enum { ClkClient, ClkRoot }; /* clicks */
-enum { SWIPE_LEFT, SWIPE_RIGHT, SWIPE_DOWN, SWIPE_UP };
+enum { SWIPE_LEFT, SWIPE_RIGHT, SWIPE_DOWN, SWIPE_UP, TZOOM_IN, TZOOM_OUT };
 
 typedef union {
 	int i;
@@ -341,6 +341,9 @@ static int ongesture(struct wlr_pointer_swipe_end_event *event);
 static void swipe_begin(struct wl_listener *listener, void *data);
 static void swipe_update(struct wl_listener *listener, void *data);
 static void swipe_end(struct wl_listener *listener, void *data);
+static void pinch_begin(struct wl_listener *listener, void *data);
+static void pinch_update(struct wl_listener *listener, void *data);
+static void pinch_end(struct wl_listener *listener, void *data);
 static void apply_pointer_config(struct wlr_pointer *pointer);
 static void reapply_pointer_config(void);
 static void destroy_pointer_config(struct wl_listener *listener, void *data);
@@ -558,6 +561,8 @@ static Monitor *selmon;
 static uint32_t swipe_fingers;
 static double swipe_dx;
 static double swipe_dy;
+static uint32_t pinch_fingers;
+static double pinch_scale;
 static double scroll_accum;
 
 /* global event handlers */
@@ -569,6 +574,9 @@ static struct wl_listener cursor_motion_absolute = {.notify = motionabsolute};
 static struct wl_listener cursor_swipe_begin = {.notify = swipe_begin};
 static struct wl_listener cursor_swipe_update = {.notify = swipe_update};
 static struct wl_listener cursor_swipe_end = {.notify = swipe_end};
+static struct wl_listener cursor_pinch_begin = {.notify = pinch_begin};
+static struct wl_listener cursor_pinch_update = {.notify = pinch_update};
+static struct wl_listener cursor_pinch_end = {.notify = pinch_end};
 static struct wl_listener gpu_reset = {.notify = gpureset};
 static struct wl_listener layout_change = {.notify = updatemons};
 static struct wl_listener new_idle_inhibitor = {.notify = createidleinhibitor};
@@ -1530,6 +1538,9 @@ cleanuplisteners(void)
 	wl_list_remove(&cursor_swipe_begin.link);
 	wl_list_remove(&cursor_swipe_update.link);
 	wl_list_remove(&cursor_swipe_end.link);
+	wl_list_remove(&cursor_pinch_begin.link);
+	wl_list_remove(&cursor_pinch_update.link);
+	wl_list_remove(&cursor_pinch_end.link);
 	wl_list_remove(&gpu_reset.link);
 	wl_list_remove(&new_idle_inhibitor.link);
 	wl_list_remove(&layout_change.link);
@@ -3284,6 +3295,77 @@ swipe_end(struct wl_listener *listener, void *data)
 
 	if (pointer_gestures)
 		wlr_pointer_gestures_v1_send_swipe_end(
+			pointer_gestures, seat, event->time_msec, event->cancelled);
+}
+
+static void
+pinch_begin(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_begin_event *event = data;
+
+	pinch_fingers = event->fingers;
+	pinch_scale = 1.0;
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_pinch_begin(
+			pointer_gestures, seat, event->time_msec, event->fingers);
+}
+
+static void
+pinch_update(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_update_event *event = data;
+
+	pinch_fingers = event->fingers;
+	pinch_scale = event->scale;
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_pinch_update(
+			pointer_gestures, seat, event->time_msec, event->dx,
+			event->dy, event->scale, event->rotation);
+}
+
+static void
+pinch_end(struct wl_listener *listener, void *data)
+{
+	struct wlr_pointer_pinch_end_event *event = data;
+	struct wlr_keyboard *keyboard;
+	uint32_t mods;
+	Gesture *g;
+	unsigned int motion;
+
+	if (!event->cancelled) {
+		keyboard = wlr_seat_get_keyboard(seat);
+		mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+
+		if (pinch_scale > 1.05)
+			motion = TZOOM_IN;
+		else if (pinch_scale < 0.95)
+			motion = TZOOM_OUT;
+		else
+			motion = (unsigned int)-1;
+
+		if (motion != (unsigned int)-1) {
+			for (g = gestures; g < gestures + gestures_len; g++) {
+				uint32_t want = g->mod;
+
+				if (want & MODKEY)
+					want = (want & ~MODKEY) | runtime_modkey;
+
+				if (CLEANMASK(mods) == CLEANMASK(want) &&
+					g->motion == motion &&
+					pinch_fingers >= g->fingers_count &&
+					pinch_fingers <= 5 &&
+					g->func) {
+					g->func(&g->arg);
+					break;
+				}
+			}
+		}
+	}
+
+	if (pointer_gestures)
+		wlr_pointer_gestures_v1_send_pinch_end(
 			pointer_gestures, seat, event->time_msec, event->cancelled);
 }
 
@@ -5280,20 +5362,33 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			const char *mod = e->count >= 6 ? e->items[5] : NULL;
 			memset(g, 0, sizeof(*g));
 
-			if (strcasecmp(e->items[0], "SWIPE"))
+			if (!strcasecmp(e->items[0], "SWIPE")) {
+				if (!strcasecmp(e->items[1], "left"))
+					g->motion = SWIPE_LEFT;
+				else if (!strcasecmp(e->items[1], "right"))
+					g->motion = SWIPE_RIGHT;
+				else if (!strcasecmp(e->items[1], "up"))
+					g->motion = SWIPE_UP;
+				else if (!strcasecmp(e->items[1], "down"))
+					g->motion = SWIPE_DOWN;
+				else
+					return 0;
+			} else if (!strcasecmp(e->items[0], "TZOOM")) {
+				if (!strcasecmp(e->items[1], "in"))
+					g->motion = TZOOM_IN;
+				else if (!strcasecmp(e->items[1], "out"))
+					g->motion = TZOOM_OUT;
+				else
+					return 0;
+			} else {
 				return 0;
-			if (!strcasecmp(e->items[1], "left"))
-				g->motion = SWIPE_LEFT;
-			else if (!strcasecmp(e->items[1], "right"))
-				g->motion = SWIPE_RIGHT;
-			else if (!strcasecmp(e->items[1], "up"))
-				g->motion = SWIPE_UP;
-			else if (!strcasecmp(e->items[1], "down"))
-				g->motion = SWIPE_DOWN;
-			else
-				return 0;
+			}
 
 			g->fingers_count = (unsigned int)strtoul(e->items[2], NULL, 0);
+			if (g->motion == TZOOM_IN || g->motion == TZOOM_OUT) {
+				if (g->fingers_count < 2 || g->fingers_count > 5)
+					return 0;
+			}
 			g->mod = mod ? dnx_mods(mod) : 0;
 
 			if (!strcasecmp(action, "spawn"))
@@ -6058,6 +6153,9 @@ setup(void)
 	wl_signal_add(&cursor->events.swipe_begin, &cursor_swipe_begin);
 	wl_signal_add(&cursor->events.swipe_update, &cursor_swipe_update);
 	wl_signal_add(&cursor->events.swipe_end, &cursor_swipe_end);
+	wl_signal_add(&cursor->events.pinch_begin, &cursor_pinch_begin);
+	wl_signal_add(&cursor->events.pinch_update, &cursor_pinch_update);
+	wl_signal_add(&cursor->events.pinch_end, &cursor_pinch_end);
 
 	cursor_shape_mgr = wlr_cursor_shape_manager_v1_create(dpy, 1);
 	wl_signal_add(&cursor_shape_mgr->events.request_set_shape, &request_set_cursor_shape);
