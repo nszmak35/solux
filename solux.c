@@ -3316,7 +3316,6 @@ pinch_update(struct wl_listener *listener, void *data)
 {
 	struct wlr_pointer_pinch_update_event *event = data;
 
-	pinch_fingers = event->fingers;
 	pinch_scale = event->scale;
 
 	if (pointer_gestures)
@@ -3354,8 +3353,7 @@ pinch_end(struct wl_listener *listener, void *data)
 
 				if (CLEANMASK(mods) == CLEANMASK(want) &&
 					g->motion == motion &&
-					pinch_fingers >= g->fingers_count &&
-					pinch_fingers <= 5 &&
+					pinch_fingers == g->fingers_count &&
 					g->func) {
 					g->func(&g->arg);
 					break;
@@ -5325,23 +5323,53 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			else buttons[dnx_buttons_n].button = (unsigned)strtoul(e->items[2], NULL, 0);
 
 			if (!strcasecmp(e->items[3], "spawn")) buttons[dnx_buttons_n].func = spawn;
-			else if (!strcasecmp(e->items[3], "setlayout")) buttons[dnx_buttons_n].func = setlayout;
-			else if (!strcasecmp(e->items[3], "zoom")) buttons[dnx_buttons_n].func = zoom;
-			else if (!strcasecmp(e->items[3], "moveresize")) buttons[dnx_buttons_n].func = moveresize;
-			else if (!strcasecmp(e->items[3], "togglefloating")) buttons[dnx_buttons_n].func = togglefloating;
 			else if (!strcasecmp(e->items[3], "view")) buttons[dnx_buttons_n].func = view;
 			else if (!strcasecmp(e->items[3], "toggleview")) buttons[dnx_buttons_n].func = toggleview;
 			else if (!strcasecmp(e->items[3], "tag")) buttons[dnx_buttons_n].func = tag;
 			else if (!strcasecmp(e->items[3], "toggletag")) buttons[dnx_buttons_n].func = toggletag;
+			else if (!strcasecmp(e->items[3], "setlayout")) buttons[dnx_buttons_n].func = setlayout;
+			else if (!strcasecmp(e->items[3], "setmfact")) buttons[dnx_buttons_n].func = setmfact;
+			else if (!strcasecmp(e->items[3], "incnmaster")) buttons[dnx_buttons_n].func = incnmaster;
+			else if (!strcasecmp(e->items[3], "focusstack")) buttons[dnx_buttons_n].func = focusstack;
+			else if (!strcasecmp(e->items[3], "focusdir")) buttons[dnx_buttons_n].func = focusdir;
+			else if (!strcasecmp(e->items[3], "swapdir")) buttons[dnx_buttons_n].func = swapdir;
+			else if (!strcasecmp(e->items[3], "focusmon")) buttons[dnx_buttons_n].func = focusmon;
+			else if (!strcasecmp(e->items[3], "tagmon")) buttons[dnx_buttons_n].func = tagmon;
+			else if (!strcasecmp(e->items[3], "cyclelayout")) buttons[dnx_buttons_n].func = cyclelayout;
 			else if (!strcasecmp(e->items[3], "cycletag")) buttons[dnx_buttons_n].func = cycletag;
+			else if (!strcasecmp(e->items[3], "togglefloating")) buttons[dnx_buttons_n].func = togglefloating;
+			else if (!strcasecmp(e->items[3], "togglefullscreen")) buttons[dnx_buttons_n].func = togglefullscreen;
+			else if (!strcasecmp(e->items[3], "togglegaps")) buttons[dnx_buttons_n].func = togglegaps;
+			else if (!strcasecmp(e->items[3], "setopacityunfocus")) buttons[dnx_buttons_n].func = setopacityunfocus;
+			else if (!strcasecmp(e->items[3], "setopacityfocus")) buttons[dnx_buttons_n].func = setopacityfocus;
+			else if (!strcasecmp(e->items[3], "killclient")) buttons[dnx_buttons_n].func = killclient;
+			else if (!strcasecmp(e->items[3], "zoom")) buttons[dnx_buttons_n].func = zoom;
+			else if (!strcasecmp(e->items[3], "quit")) buttons[dnx_buttons_n].func = quit;
+			else if (!strcasecmp(e->items[3], "reload_config")) buttons[dnx_buttons_n].func = reload_config;
+			else if (!strcasecmp(e->items[3], "chvt")) buttons[dnx_buttons_n].func = chvt;
+			else if (!strcasecmp(e->items[3], "moveresize")) buttons[dnx_buttons_n].func = moveresize;
 			else return 0;
 
-			if (e->count >= 5 && !strcasecmp(e->items[3], "spawn"))
+			if (!e->count || e->count < 5 || !e->items[4] || !*e->items[4] || !strcasecmp(e->items[4], "NONE")) {
+				buttons[dnx_buttons_n].arg.i = 0;
+			} else if (!strcasecmp(e->items[3], "spawn")) {
 				buttons[dnx_buttons_n].arg.v = dnx_command_for_name(e->items[4]);
-			else if (e->count >= 5 && !strcasecmp(e->items[3], "setlayout")) {
+			} else if (!strcasecmp(e->items[3], "setlayout")) {
 				int li = dnx_layout_index(e->items[4]);
 				buttons[dnx_buttons_n].arg.v = (li >= 0) ? &layouts[li] : &layouts[0];
-			} else if (e->count >= 5) {
+			} else if (!strcasecmp(e->items[3], "setmfact") ||
+					!strcasecmp(e->items[3], "setopacityunfocus") ||
+					!strcasecmp(e->items[3], "setopacityfocus")) {
+				buttons[dnx_buttons_n].arg.f = strtof(e->items[4], NULL);
+			} else if (!strcasecmp(e->items[3], "focusdir") ||
+					!strcasecmp(e->items[3], "swapdir") ||
+					!strcasecmp(e->items[3], "view") ||
+					!strcasecmp(e->items[3], "toggleview") ||
+					!strcasecmp(e->items[3], "tag") ||
+					!strcasecmp(e->items[3], "toggletag") ||
+					!strcasecmp(e->items[3], "chvt")) {
+				buttons[dnx_buttons_n].arg.ui = (!strcasecmp(e->items[4], "~0") || !strcasecmp(e->items[4], "ALL")) ? ~0u : (uint32_t)strtoul(e->items[4], NULL, 0);
+			} else {
 				buttons[dnx_buttons_n].arg.i = atoi(e->items[4]);
 			}
 			buttons_len = ++dnx_buttons_n;
