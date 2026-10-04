@@ -1,414 +1,154 @@
 # Solux
 
-> A simple and configurable Wayland compositor.
-
-Solux is a Wayland compositor based on [dwl](https://codeberg.org/dwl/dwl), focused on being lightweight, configurable, and easy to modify.
-
-Unlike the original dwl configuration approach, Solux uses an external configuration file written in DNX.
-
-The default configuration is located at:
-
-```text
-default/config.dnx
-```
-
-When installed, Solux can use the system configuration:
-
-```text
-/etc/solux/config.dnx
-```
-
-and the user's configuration:
-
-```text
-~/.config/solux/config.dnx
-```
-
-Solux supports reloading its configuration at runtime, so many configuration changes can be applied without restarting the compositor.
+Solux is a Wayland compositor built on [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots) 0.20 and
+[SceneFX](https://github.com/wlrfx/scenefx) 0.5. It descends from [dwl](https://codeberg.org/dwl/dwl) and
+borrows animation ideas from [MangoWM](https://github.com/DreamMaoMao/mangowc). It is configured with a
+Python file and controlled at runtime with `soluxctl`.
 
 ## Features
 
-- Wayland compositor based on dwl
-- wlroots-based rendering and input handling
-- Tiling and floating window management
-- Multiple layouts
-- Gaps
-- Per-monitor configuration
-- Monitor rules
-- Runtime configuration reload
-- Keyboard and pointer configuration
-- libinput configuration
-- XWayland support (when compiled with `XWAYLAND`)
-- DWL IPC / ext-workspaces support
-- Layer-shell support
-- Output management
-- Output power management
-- Session locking
-- Fractional scaling support
-- XDG activation and decoration support
-- Configurable window rules
+- Tiling layouts: dwindle, tile and monocle, plus a free-floating layout with a zoomable canvas (camera per tag).
+- SceneFX effects: rounded corners (`scenefx_corner_radius`), window shadows, background blur, window opacity.
+- Animations: window open, close, move and resize, and a workspace slide when switching tags.
+- Borders: a plain border plus optional outer ("start") and inner ("end") borders with separate colors.
+- Touchpad gestures (swipe and pinch) that can be bound to any action.
+- Protocols: dwl-ipc-unstable-v2 (status bars), ext-workspace-v1, layer-shell, session lock,
+  foreign-toplevel management, output management, XWayland (optional).
+- `soluxctl`: reload the configuration, switch layouts and workspaces, and watch compositor state.
+
+## Repository layout
+
+```
+.
+├── Makefile, config.mk     build configuration
+├── default/config.py       default configuration (installed to /etc/solux/config.py)
+├── protocols/              protocol XML files, used to generate headers at build time
+├── solux.desktop           Wayland session entry
+├── licenses/               licenses of the projects Solux is derived from
+└── src/
+    ├── solux.c             core: types, globals, window management, main()
+    ├── client.h            client helper functions
+    ├── util.c, util.h      small utilities
+    ├── animations/         animation core, per-client animations, tag switch animation
+    ├── canvas/             float-layout canvas (camera, zoom, coordinate conversion)
+    ├── config/             configuration helpers, scalar settings, loading and reloading
+    ├── effects/            borders, corner radius, shadow, blur and opacity
+    ├── ext_workspace/      ext-workspace-v1 implementation
+    ├── gestures/           touchpad gestures
+    ├── input/              keyboard and pointer handling
+    ├── ipc/                dwl-ipc protocol and the soluxctl control socket
+    ├── layouts/            dwindle, tile and monocle layouts
+    ├── normalfloat/        helpers for normal floating windows and the canvas
+    ├── output/             monitors, output management and rendering
+    ├── parser/             embedded Python configuration parser
+    ├── shell/              layer-shell, session lock, foreign-toplevel
+    ├── soluxctl/           soluxctl command line tool
+    └── xwayland/           XWayland client handling
+```
+
+`src/solux.c` includes the modules under `src/` directly, so Solux is built as a single translation unit
+together with `util.c`, `parser/parserconf.c`, `ext_workspace/wlr_ext_workspace_v1.c` and the generated
+dwl-ipc code.
 
 ## Dependencies
 
-### Runtime and build dependencies
+- wlroots 0.20
+- SceneFX 0.5 (`pkg-config` must find `scenefx-0.5`)
+- wayland-server, wayland-client, wayland-protocols, wayland-scanner
+- xkbcommon, libinput, pixman
+- Python 3 development files (embedded interpreter for the configuration parser)
+- xcb and xcb-icccm when XWayland support is enabled in `config.mk`
 
-Solux requires:
-
-- `libinput`
-- `wayland`
-- `wlroots` 0.20
-- `xkbcommon`
-- `libdrm`
-
-The following are required at build time:
-
-- `wayland-protocols`
-- `pkg-config`
-
-Depending on your distribution, development packages may have a `-devel` suffix.
-
-For example, on distributions using separate development packages, you will generally need:
-
-```text
-libinput-devel
-wayland-devel
-wlroots-devel
-xkbcommon-devel
-libdrm-devel
-wayland-protocols
-pkg-config
-```
-
-### Optional XWayland support
-
-If Solux is compiled with `XWAYLAND`, the following additional dependencies are required:
-
-- Xlib
-- XCB
-- XCB ICCCM
-- XWayland support from wlroots
-
-Typical development packages are:
-
-```text
-libX11-devel
-libxcb-devel
-xcb-util-wm-devel
-```
-
-The exact package names depend on your distribution.
+The Makefile first tries `pkg-config python3-embed` and falls back to `python3-config`.
 
 ## Building
 
-Clone the repository and enter the source directory:
-
-```sh
-git clone <repository-url>
-cd solux
-```
-
-Make sure all dependencies are installed.
-
-Then build Solux:
-
 ```sh
 make
-```
-
-If the build succeeds, the `solux` executable will be produced.
-
-To install it system-wide:
-
-```sh
-doas make install
-```
-
-or:
-
-```sh
 sudo make install
 ```
 
-By default, the executable is installed into:
+`make` generates the protocol headers from `protocols/*.xml` (and the stable protocols shipped with
+wayland-protocols) into `build/gen/`, compiles everything into `build/`, and produces `./solux` and
+`./soluxctl`. `make clean` removes `build/` and both binaries.
+`make install` installs the binaries, `solux.desktop` and `/etc/solux/config.py`.
 
-```text
-/usr/local/bin/
+Edit `config.mk` to change the install prefix, the wlroots flags or to disable XWayland.
+
+## Running
+
+```sh
+solux [-v] [-d] [-c config.py] [-s startup-command]
 ```
 
-The configuration can be installed to:
-
-```text
-/etc/solux/config.dnx
-```
-
-depending on the installation rules provided by the project's `Makefile`.
+`-v` prints the version, `-d` enables debug logging, `-c` selects a configuration file and `-s` runs a command at startup.
 
 ## Configuration
 
-Solux uses DNX configuration files.
+Configuration is a Python file. Files are looked up in this order:
 
-The example/default configuration is:
+1. `-c /path/to/config.py`
+2. `~/.config/solux/config.py`
+3. the default file: `SOLUX_PY_DEFAULT`, `default/config.py`, `/etc/solux/config.py`, or `default/config.py` next to the binary
 
-```text
-default/config.dnx
+`default/config.py` lists every supported setting. Scalar settings are grouped in classes (`Appearance`, `Blur`,
+`Animations`, `Gaps`, `Border_Details`, `Input`, `Dwindle_Settings`); other settings are module-level values:
+`tags`, `autostart`, `rules`, `monrules`, `layouts`, `gestures`, `keys` and `buttons`.
+
+Both `spawn` actions and `autostart` entries are single command strings executed with `/bin/sh -c`:
+
+```python
+keys = [
+    ["MODKEY", "r", "spawn", "rofi -show drun"],
+    ["MODKEY", "t", "spawn", "foot"],
+]
+
+autostart = [
+    "swaybg -i img.jpg",
+    "waybar",
+]
 ```
 
-This file contains the default settings for Solux and can be used as a reference when creating your own configuration.
+Reload the configuration with the `reload_config` action or `soluxctl reconfig`.
 
-For a user-specific configuration, use:
+### Corner radius, borders and shadows
 
-```text
-~/.config/solux/config.dnx
+`scenefx_corner_radius` is the single radius for the whole window: the client buffer, the borders, blur and
+shadow all use it. `scenefx_corner_radius_only_floating` limits rounding to floating windows.
+
+Shadows need `scenefx_shadow = True` and a blur sigma above zero (`scenefx_shadow_blur_sigma` for unfocused and
+`scenefx_shadow_blur_sigma_focus` for the focused window); a sigma of 0 draws no visible shadow.
+`scenefx_shadow_color` and `scenefx_shadow_color_focus` are `0xRRGGBBAA` values.
+
+### Tag (workspace) animation
+
+Switching tags slides the old workspace out and the new one in. The offset is purely visual; window geometry,
+canvas coordinates, camera and zoom are not modified.
+
+```python
+class Animations:
+    tag_animation_direction = "horizontal"   # or "vertical"
+    animation_duration_tag = 300             # ms, 0 disables the tag animation
+    animation_curve_tag = "0.46, 1.0, 0.29, 0.99"
 ```
 
-The system-wide configuration path is:
+It follows the global `animations` switch.
 
-```text
-/etc/solux/config.dnx
+## soluxctl
+
+```
+soluxctl help
+soluxctl reconfig
+soluxctl set-workspace <name_tag>
+soluxctl set-layout <layout>
+soluxctl watch-layout
+soluxctl watch-kblayout
+soluxctl watch-monitor
+soluxctl watch-workspace <name_tag>
+soluxctl watch-focus
+soluxctl watch-all
 ```
 
-The recommended approach is to copy the default configuration to your user configuration directory:
+## Licenses
 
-```sh
-mkdir -p ~/.config/solux
-cp default/config.dnx ~/.config/solux/config.dnx
-```
-
-Then edit:
-
-```sh
-$EDITOR ~/.config/solux/config.dnx
-```
-
-### Configuration priority
-
-Solux looks for configuration in the following order:
-
-1. `~/.config/solux/config.dnx`
-2. `/etc/solux/config.dnx`
-3. `default/config.dnx`
-
-The exact fallback behavior depends on how Solux was built and where it is launched from.
-
-The user configuration takes priority over the default configuration.
-
-## DNX
-
-DNX is the configuration format used by Solux.
-
-Instead of recompiling Solux every time a configuration option is changed, configuration is read from `config.dnx`.
-
-The configuration contains sections for things such as:
-
-- appearance
-- keybindings
-- mouse bindings
-- layouts
-- monitor rules
-- window rules
-- input configuration
-- commands
-- startup commands
-
-For example, the default configuration contains the layout and monitor configuration used by Solux.
-
-See:
-
-```text
-default/config.dnx
-```
-
-for the complete list of available options and their syntax.
-
-## Runtime configuration reload
-
-Solux supports reloading the configuration without restarting the compositor.
-
-After changing `config.dnx`, use the configured reload keybinding or the corresponding reload command.
-
-This allows configuration changes such as:
-
-- colors
-- gaps
-- layouts
-- monitor rules
-- keybindings
-- input settings
-- window rules
-
-to be applied while Solux is running.
-
-## Layouts
-
-Solux provides several tiling layouts, including:
-
-- tile
-- monocle
-- spiral
-- right spiral
-- dwindle
-- right dwindle
-- right tile
-
-The available layouts and their names are defined in:
-
-```text
-default/config.dnx
-```
-
-Layouts can be selected and switched through the configured keybindings.
-
-## Monitor configuration
-
-Solux supports monitor rules through `%monrules`.
-
-Monitor rules can define:
-
-- monitor name
-- master-factor (`mfact`)
-- number of master windows (`nmaster`)
-- scale
-- layout
-- rotation/transform
-- X position
-- Y position
-
-This allows different monitors to have independent layouts and positioning.
-
-For example, monitor-specific configuration belongs in:
-
-```text
-default/config.dnx
-```
-
-and can be overridden from:
-
-```text
-~/.config/solux/config.dnx
-```
-
-## Window rules
-
-Window rules allow Solux to apply settings automatically to applications.
-
-Rules can specify things such as:
-
-- application ID
-- title
-- tags
-- floating state
-- focused opacity
-- unfocused opacity
-- monitor
-
-This makes it possible to automatically place applications on specific tags or monitors and configure whether they should float.
-
-## Input configuration
-
-Solux uses libinput for input devices.
-
-The configuration supports options including:
-
-- natural scrolling
-- scroll method
-- click method
-- acceleration profile
-- tap button mapping
-
-These settings can be configured through `config.dnx`.
-
-## XWayland
-
-XWayland support is optional.
-
-When building Solux with:
-
-```text
-XWAYLAND
-```
-
-defined, Solux includes support for X11 applications through XWayland.
-
-If you do not need X11 application support, Solux can be built without XWayland.
-
-## Wayland protocols
-
-Solux uses a number of Wayland and wlroots protocols, including support for:
-
-- layer-shell
-- foreign toplevel management
-- fractional scaling
-- output management
-- output power management
-- session locking
-- virtual keyboard
-- virtual pointer
-- pointer constraints
-- relative pointer
-- screencopy
-- primary selection
-- data control
-- XDG activation
-- XDG decorations
-- XDG output
-
-The required protocol sources are provided/used during compilation as part of the project's build process.
-
-## Useful software
-
-Solux is a compositor, so you will probably want a few Wayland utilities and applications alongside it.
-
-### Terminal
-
-[foot](https://codeberg.org/dnkl/foot)
-
-### Display and output management
-
-`wlr-randr`
-
-### Status bar
-
-Any Wayland-compatible status bar can be used.
-
-Examples include:
-
-- Waybar
-- yambar
-- other wlroots-compatible bars
-
-## Starting Solux
-
-Solux can be started from a Wayland-compatible session or directly from a TTY using your preferred launcher/session setup.
-
-A typical setup may look like:
-
-```sh
-solux
-```
-
-Applications such as a terminal or status bar can then be started using the configured startup commands.
-
-## Configuration example
-
-The main configuration file to study is:
-
-```text
-default/config.dnx
-```
-
-It is recommended to copy it first:
-
-```sh
-mkdir -p ~/.config/solux
-cp default/config.dnx ~/.config/solux/config.dnx
-```
-
-Then customize the copied file rather than modifying the system/default configuration.
-
-## Known Issues
-
-N/A
-
-## License
-
-GPL-v3
+Solux contains code derived from dwl, dwm, sway, tinywl and MangoWM. See `LICENSE` and the files in `licenses/`.
