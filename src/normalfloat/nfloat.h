@@ -103,8 +103,14 @@ nfloat_finish_spawn_canvas(Client *c)
 	if (c->has_spawn_canvas && c->spawn_canvas_mon == m && !c->isfullscreen) {
 		c->geom.x = (int)lround(c->spawn_canvas_x - c->geom.width / 2.0);
 		c->geom.y = (int)lround(c->spawn_canvas_y - c->geom.height / 2.0);
-		if (!c->is_pending_open_animation)
+		if (c->animation.running && c->animation.action == SOLUX_ANIM_OPEN) {
+			/* XWayland starts OPEN from mapnotify, before this runs, so
+			 * is_pending_open_animation is already false.  Keep the running
+			 * OPEN origin and only refresh its final target. */
+			c->animation.target = c->geom;
+		} else if (!c->is_pending_open_animation) {
 			c->animation.initial = c->animation.current = c->animation.target = c->geom;
+		}
 	}
 
 	x = c->geom.x + c->geom.width / 2.0;

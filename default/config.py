@@ -11,7 +11,7 @@ class Appearance:
     default_opacity_focus = 1.0
     scenefx_opacity_inactive = 0.95
     scenefx_opacity_active = 0.98
-    scenefx_shadow = True
+    scenefx_shadow = False
     scenefx_shadow_only_floating = False
     scenefx_shadow_color = "0x00000080"
     scenefx_shadow_color_focus = "0x000000b0"
@@ -133,7 +133,7 @@ gestures = [
 ]
 
 keys = [
-    ["MODKEY", "r", "spawn", "rofi -show window -window-thumbnail -show-icons -theme ~/.config/rofi/we.rasi.d"],
+    ["MODKEY", "r", "spawn", "rofi -show window"],
     ["MODKEY", "e", "spawn", "nemo"],
     ["MODKEY", "t", "spawn", "foot"],
     ["MODKEY", "b", "spawn", "qutebrowser"],

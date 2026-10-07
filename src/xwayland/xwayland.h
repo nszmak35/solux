@@ -18,6 +18,13 @@ associatex11(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, associate);
 
+	/* Same as XDG clients (commitnotify initial commit): capture the camera
+	 * point that is visible now, before map/applyrules()/setmon() can refocus
+	 * another client and move the canvas.  Without this XWayland windows have
+	 * no spawn point and fall back to a fixed position. */
+	if (!client_is_unmanaged(c))
+		nfloat_capture_spawn_canvas(c);
+
 	LISTEN(&client_surface(c)->events.map, &c->map, mapnotify);
 	LISTEN(&client_surface(c)->events.unmap, &c->unmap, unmapnotify);
 }
@@ -87,6 +94,8 @@ void
 dissociatex11(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, dissociate);
+	if (nfloat_spawn_pending == c)
+		nfloat_spawn_pending = NULL;
 	wl_list_remove(&c->map.link);
 	wl_list_remove(&c->unmap.link);
 }
