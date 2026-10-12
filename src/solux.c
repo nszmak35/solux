@@ -233,6 +233,11 @@ struct SoluxFadeClient {
 	int type;
 	int action;
 	float start_opacity;
+	/* Shadow node of the close snapshot (child of scene, NULL if none) and the
+	 * layout it had at the start, so it can follow the window's animation. */
+	struct wlr_scene_shadow *shadow;
+	int shadow_sigma, shadow_w, shadow_h, shadow_radius;
+	float shadow_color[4];
 };
 
 
@@ -323,6 +328,10 @@ typedef struct Client {
 	float opacity_unfocus;
 	int corner_radius;
 	struct wlr_scene_shadow *shadow;
+	/* Shadow blur sigma as configured (zoom 1).  The scene node holds the
+	 * zoom-scaled value, so it must never be read back as the base. */
+	float shadow_base_sigma;
+	bool shadow_base_set;
 	struct wlr_scene_blur *blur;
 	int has_shadow_enabled;
 	struct wlr_scene_rect *round_border;
@@ -337,6 +346,13 @@ typedef struct Client {
 	int isnoanimation;
 	int isminimized;
 	bool canvas_visualized;
+	/* Buffer scale last requested from the client by the canvas zoom
+	 * (0 = never changed by the canvas). */
+	float canvas_buf_scale;
+	/* Screen px per surface px applied to the client's buffers by the canvas
+	 * (0 = not applied yet); used to map pointer coordinates back. */
+	double canvas_scale_x;
+	double canvas_scale_y;
 	/* Canvas center captured before the initial map/setmon focus.  The first
 	 * setmon() can move the camera immediately when animations are disabled;
 	 * Float spawn must use the canvas position that was visible before that. */
@@ -472,6 +488,10 @@ struct Monitor {
 	uint64_t canvas_time_started;
 	uint32_t canvas_duration;
 	bool canvas_animating;
+	/* Zoom-dependent client buffer scale (sharp rendering while zoomed in). */
+	double canvas_scale_mult;
+	double canvas_scale_seen_zoom;
+	uint64_t canvas_scale_settle_ms;
 	bool taganim_active;
 	bool taganim_vertical;
 	uint64_t taganim_started;
@@ -707,6 +727,8 @@ static void iter_xdg_scene_buffers_opacity(struct wlr_scene_buffer *buffer, int 
 static void iter_xdg_scene_buffers_corner_radius(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data);
 static int in_shadow_ignore_list(const char *str);
 static void client_set_shadow_blur_sigma(Client *c, float blur_sigma);
+static void client_refresh_shadow(Client *c);
+static void client_apply_shadow_geometry(Client *c, int width, int height, double zoom);
 static void update_client_corner_radius(Client *c);
 static void update_client_rounded_borders(Client *c);
 static void update_client_shadow_color(Client *c);
@@ -745,6 +767,8 @@ static int locked;
 static void *exclusive_focus;
 static bool solux_pertag_restoring;
 static bool solux_focus_restoring;
+/* Client last entered by real pointer motion (focus-follows-mouse bookkeeping). */
+static Client *pointer_hover_client;
 static struct wl_display *dpy;
 static struct wl_event_loop *event_loop;
 
@@ -1758,6 +1782,15 @@ destroynotify(struct wl_listener *listener, void *data)
 					m->pertag->focused[i] = NULL;
 		}
 	}
+	/* Never keep a pointer to the client that is about to be freed. */
+	if (c == grabc) {
+		cursor_mode = CurNormal;
+		grabc = NULL;
+	}
+	if (nfloat_spawn_pending == c)
+		nfloat_spawn_pending = NULL;
+	if (pointer_hover_client == c)
+		pointer_hover_client = NULL;
 	free(c);
 }
 
@@ -2539,7 +2572,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 	update_client_rounded_borders(c);
 	if (scenefx_shadow && c->shadow)
-		client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+		client_refresh_shadow(c);
 
 	if (scenefx_blur && c->blur) {
 		int radius = c->corner_radius;

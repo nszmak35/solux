@@ -73,7 +73,16 @@ buttonpress(struct wl_listener *listener, void *data)
 			cursor_mode = CurNormal;
 			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
-			setmon(grabc, selmon, 0);
+			if (grabc && selmon && grabc->mon != selmon) {
+				/* Keep the window where it was released and do not let the
+				 * target camera chase it: the drop must not move the view. */
+				solux_canvas_transfer_client(grabc, selmon);
+				solux_focus_restoring = true;
+				setmon(grabc, selmon, 0);
+				solux_focus_restoring = false;
+			} else {
+				setmon(grabc, selmon, 0);
+			}
 			grabc = NULL;
 			return;
 		}
@@ -380,16 +389,21 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 
 	/* Find the client under the pointer and send the event along. */
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, &sx, &sy);
-	if (c && surface == client_surface(c) && solux_canvas_active(c->mon))
-		solux_canvas_surface_coords(c, &sx, &sy);
+	if (c && surface && solux_canvas_active(c->mon))
+		solux_canvas_surface_coords(c, surface, &sx, &sy);
 
 	if (cursor_mode == CurPressed && !seat->drag
 			&& surface != seat->pointer_state.focused_surface
 			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
 		c = w;
 		surface = seat->pointer_state.focused_surface;
-		sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
-		sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		/* A button is held and the pointer left the surface: keep sending
+		 * coordinates relative to that surface.  On the zoomed canvas the
+		 * window's geom is world space, so map through the camera instead. */
+		if (l || !solux_canvas_surface_local(w, surface, cursor->x, cursor->y, &sx, &sy)) {
+			sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
+			sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		}
 	}
 
 	/* time is 0 in internal calls meant to restore pointer focus. */
@@ -526,10 +540,22 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 		uint32_t time)
 {
 	struct timespec now;
+	bool real_motion = time != 0;
 
-	if (surface != seat->pointer_state.focused_surface &&
-			sloppyfocus && time && c && !client_is_unmanaged(c))
+	/* Focus follows the mouse when real pointer motion enters a different
+	 * surface -- or a different client than the last one entered by motion.
+	 * The second test matters because the canvas re-targets pointer focus
+	 * every frame (camera/zoom/animations move windows under a resting
+	 * pointer) without moving keyboard focus; comparing only the surface
+	 * made the next real motion over that window a no-op, so it never got
+	 * focus. */
+	if (sloppyfocus && real_motion && c && !client_is_unmanaged(c) &&
+			(surface != seat->pointer_state.focused_surface ||
+			 c != pointer_hover_client)) {
 		focusclient(c, 0);
+	}
+	if (real_motion)
+		pointer_hover_client = c;
 
 	/* If surface is NULL, clear pointer focus */
 	if (!surface) {

@@ -133,7 +133,7 @@ gestures = [
 ]
 
 keys = [
-    ["MODKEY", "r", "spawn", "rofi -show window"],
+    ["MODKEY", "r", "spawn", "rofi -show window -window-thumbnail -show-icons -theme ~/.config/rofi/we.rasi.d"],
     ["MODKEY", "e", "spawn", "nemo"],
     ["MODKEY", "t", "spawn", "foot"],
     ["MODKEY", "b", "spawn", "qutebrowser"],

@@ -46,6 +46,35 @@ cleanupmon(struct wl_listener *listener, void *data)
 
 	free(m->pertag);
 	closemon(m);
+	/* Forget every pointer to the monitor that is about to be freed. */
+	if (canvas_drag_mon == m) {
+		canvas_drag_mon = NULL;
+		if (cursor_mode == CurCanvasMove)
+			cursor_mode = CurNormal;
+	}
+	{
+		Client *sc;
+		SoluxFadeClient *fc, *fctmp;
+
+		wl_list_for_each(sc, &clients, link) {
+			if (sc->spawn_canvas_mon == m) {
+				sc->spawn_canvas_mon = NULL;
+				sc->has_spawn_canvas = false;
+				if (nfloat_spawn_pending == sc)
+					nfloat_spawn_pending = NULL;
+			}
+		}
+		/* Close snapshots are ticked by their monitor's frame handler; with
+		 * the monitor gone they would stay on screen forever. */
+		wl_list_for_each_safe(fc, fctmp, &fadeout_clients, link) {
+			if (fc->mon != m)
+				continue;
+			wl_list_remove(&fc->link);
+			wlr_scene_node_for_each_buffer(&fc->scene->node, fadeout_buffer_free_base, NULL);
+			wlr_scene_node_destroy(&fc->scene->node);
+			free(fc);
+		}
+	}
 	wlr_scene_node_destroy(&m->fullscreen_bg->node);
 	free(m);
 }

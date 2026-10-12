@@ -263,7 +263,7 @@ static void solux_client_apply_visual(Client *c, struct wlr_box visual, double f
 			});
 		}
 		if (c->shadow)
-			client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+			client_refresh_shadow(c);
 		c->geom = real;
 	}
 }
@@ -451,7 +451,7 @@ static void solux_client_animation_next_tick(Client *c)
 			wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 		update_client_rounded_borders(c);
 		if (c->shadow)
-			client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+			client_refresh_shadow(c);
 		/* Restore the real target buffer geometry/clip/opacity after zoom or
 		 * fade. Otherwise the last animated SceneFX destination can survive until
 		 * the next client commit. */
@@ -505,6 +505,38 @@ static void solux_client_fadeout_next_tick(SoluxFadeClient *f)
 		op = MAX(0.0, fadeout_begin_opacity * (1.0 -
 			solux_animation_factor(p, SOLUX_ANIM_OPAFADEOUT)));
 		solux_animation_set_buffers_opacity(&f->scene->node, (float)op);
+	}
+	if (f->shadow) {
+		/* The snapshot's shadow follows the window: it shrinks with a zoom
+		 * close and fades with it.  Left alone it kept its full size and
+		 * opacity and stuck out around the vanishing window. */
+		double sw = f->initial.width > 0 ? (double)v.width / (double)f->initial.width : 1.0;
+		double sh = f->initial.height > 0 ? (double)v.height / (double)f->initial.height : 1.0;
+		double avg, keep;
+		int sigma, w, h, radius;
+		float col[4];
+
+		if (f->type != 2)
+			sw = sh = 1.0;
+		avg = (sw + sh) / 2.0;
+		keep = animation_fade_out ?
+			MAX(0.0, 1.0 - solux_animation_factor(p, SOLUX_ANIM_OPAFADEOUT)) : 1.0;
+		sigma = MAX(0, (int)lround(f->shadow_sigma * avg));
+		w = MAX(0, (int)lround(f->shadow_w * sw));
+		h = MAX(0, (int)lround(f->shadow_h * sh));
+		radius = MAX(0, (int)lround(f->shadow_radius * avg));
+		col[0] = f->shadow_color[0];
+		col[1] = f->shadow_color[1];
+		col[2] = f->shadow_color[2];
+		col[3] = (float)(f->shadow_color[3] * keep);
+		wlr_scene_shadow_set_blur_sigma(f->shadow, sigma);
+		wlr_scene_node_set_position(&f->shadow->node, -sigma, -sigma);
+		wlr_scene_shadow_set_size(f->shadow, w + 2 * sigma, h + 2 * sigma);
+		wlr_scene_shadow_set_corner_radius(f->shadow, radius);
+		wlr_scene_shadow_set_clipped_region(f->shadow, (struct clipped_region){
+			.corners = corner_radii_all(radius),
+			.area = { sigma, sigma, w, h } });
+		wlr_scene_shadow_set_color(f->shadow, col);
 	}
 	if (p >= 1.0) {
 		wl_list_remove(&f->link);
