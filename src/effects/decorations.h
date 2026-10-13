@@ -470,6 +470,33 @@ update_client_corner_radius(Client *c)
 	}
 }
 
+/* Плавающее ли окно для теней: флаг isfloating ИЛИ раскладка Float (без arrange). */
+static int
+client_shadow_floating(Client *c)
+{
+	const Layout *lt; /* текущая раскладка монитора окна */
+
+	if (!c) /* нет окна - не плавающее */
+		return 0;
+	if (c->isfloating) /* явно плавающее окно */
+		return 1;
+	lt = c->mon ? c->mon->lt[c->mon->sellt] : NULL; /* раскладка монитора */
+	return lt && !lt->arrange; /* Float-раскладка: все окна плавающие */
+}
+
+/* Нужна ли окну тень сейчас (учитывает shadow_only_floating, ignore list, fullscreen). */
+static int
+client_shadow_wanted(Client *c)
+{
+	if (!c) /* нет окна - тени нет */
+		return 0;
+	if (scenefx_shadow_only_floating && !client_shadow_floating(c)) /* тень только у плавающих */
+		return 0;
+	if (in_shadow_ignore_list(client_get_appid(c)) || c->isfullscreen) /* исключения */
+		return 0;
+	return 1; /* тень нужна */
+}
+
 void
 update_client_shadow_color(Client *c)
 {
@@ -480,8 +507,7 @@ update_client_shadow_color(Client *c)
 		return;
 	color = (c->mon && focustop(c->mon) == c)
 		? scenefx_shadow_color_focus : scenefx_shadow_color;
-	if ((scenefx_shadow_only_floating && !c->isfloating) ||
-			in_shadow_ignore_list(client_get_appid(c)) || c->isfullscreen) {
+	if (!client_shadow_wanted(c)) { /* единое решение о тени */
 		color = scenefx_transparent;
 		enabled = 0;
 	}

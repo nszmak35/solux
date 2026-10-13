@@ -204,25 +204,72 @@ destroykeyboardgroup(struct wl_listener *listener, void *data)
 	free(group);
 }
 
+/* Переключает раскладку клавиатуры как по хоткею, но НЕ временно: XKB-группа меняется
+ * и на групповой клавиатуре, и на реальных устройствах (иначе следующее событие
+ * модификаторов от устройства вернёт старую группу). delta: сколько раскладок шагнуть. */
+static int
+solux_kblayout_step(int delta)
+{
+	/* Копия приватной структуры wlroots (как в focusclient), чтобы пройти по устройствам группы */
+	struct keyboard_group_device {
+		struct wlr_keyboard *keyboard;
+		struct wl_listener key;
+		struct wl_listener modifiers;
+		struct wl_listener keymap;
+		struct wl_listener repeat_info;
+		struct wl_listener destroy;
+		struct wl_list link;
+	} *device;
+	struct wlr_keyboard *keyboard; /* групповая клавиатура compositor-а */
+	xkb_layout_index_t nlayouts, cur, next; /* число раскладок, текущая и новая группа */
+	int step; /* шаг, приведённый к диапазону 0..nlayouts-1 */
+
+	if (!kb_group || !kb_group->wlr_group) /* клавиатурная группа ещё не создана */
+		return -1;
+	keyboard = &kb_group->wlr_group->keyboard;
+	if (!keyboard->keymap || !keyboard->xkb_state) /* нет keymap - переключать нечего */
+		return -1;
+
+	nlayouts = xkb_keymap_num_layouts(keyboard->keymap);
+	if (nlayouts <= 1) /* одна раскладка: это не ошибка, просто ничего не меняем */
+		return 0;
+
+	step = delta % (int)nlayouts; /* шаг по кругу */
+	if (step < 0) /* отрицательный шаг приводим к положительному */
+		step += (int)nlayouts;
+	if (step == 0) /* полный круг или delta == 0: менять нечего */
+		return 0;
+
+	cur = keyboard->modifiers.group; /* реальная текущая группа, а не только выбранная самим dwl */
+	if (cur >= nlayouts) /* защита от неверной группы */
+		cur = 0;
+	next = (cur + (xkb_layout_index_t)step) % nlayouts; /* следующая раскладка по кругу */
+
+	/* Сначала реальные устройства: их состояние - источник истины для группы. */
+	wl_list_for_each(device, &kb_group->wlr_group->devices, link) {
+		if (!device->keyboard || !device->keyboard->xkb_state) /* устройство без состояния XKB */
+			continue;
+		wlr_keyboard_notify_modifiers(device->keyboard,
+			device->keyboard->modifiers.depressed,
+			device->keyboard->modifiers.latched,
+			device->keyboard->modifiers.locked, next); /* меняем только группу */
+	}
+
+	/* Затем групповая клавиатура: именно её состояние уходит клиентам через seat. */
+	wlr_keyboard_notify_modifiers(keyboard, keyboard->modifiers.depressed,
+		keyboard->modifiers.latched, keyboard->modifiers.locked, next); /* меняем только группу */
+
+	current_kblayout = next; /* запоминаем выбор для assignkeymap() и перезагрузки конфига */
+	kblayout_idx = next; /* focusclient() переносит этот индекс на устройство при смене фокуса */
+	kblayout(kb_group); /* сразу публикуем новую раскладку в /tmp/dwl-keymap */
+	return 0;
+}
+
 void
 incxkbrules(const Arg *arg)
 {
-	{
-		unsigned int nlayouts = 1;
-		char *p = xkb_rules.layout;
-		if (p) {
-			for (; *p; p++)
-				if (*p == ',')
-					nlayouts++;
-		}
-		if (nlayouts)
-			current_kblayout = (current_kblayout + arg->i + nlayouts) % nlayouts;
-	}
-	assignkeymap(&kb_group->wlr_group->keyboard);
-
-	/* This path changes the XKB group without a keyboard event. Publish it
-	 * immediately so status consumers see the new layout even on the root. */
-	kblayout(kb_group);
+	/* Раскладка меняется по кругу из keyboard_layout (например "us,ru"). */
+	solux_kblayout_step(arg && arg->i ? arg->i : 1); /* единая постоянная смена раскладки */
 }
 
 static void

@@ -760,6 +760,10 @@ solux_canvas_focus_client(Client *c)
 		return;
 	if (solux_focus_restoring)
 		return;
+	/* Пока пользователь тащит канвас (canvasdrag), камера принадлежит ему:
+	 * повторная фокусировка окна (chromium и др.) не должна возвращать камеру. */
+	if (cursor_mode == CurCanvasMove)
+		return;
 
 	/* Follow focus in Float canvas mode: keep the focused window centred in
 	 * the viewport, including newly mapped windows and focusdir navigation. */

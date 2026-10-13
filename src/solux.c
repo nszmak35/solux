@@ -97,6 +97,12 @@ enum { BorderNormal, BorderFocus, BorderUrgent };
 
 #include "dwl-ipc-unstable-v2-protocol.h"
 #include "util.h"
+/* Страховка: те же объявления, что в src/util.h. Совпадающее повторное объявление безопасно,
+ * а если util.h не найден или подхватился чужой, сборка всё равно не падает. */
+#include <stddef.h> /* size_t для объявлений ниже */
+void die(const char *fmt, ...); /* завершает процесс с сообщением (util.c) */
+void *ecalloc(size_t nmemb, size_t size); /* calloc с проверкой (util.c) */
+int fd_set_nonblock(int fd); /* неблокирующий режим дескриптора (util.c) */
 extern const struct wl_interface ext_workspace_manager_v1_interface;
 extern const struct wl_interface ext_workspace_group_handle_v1_interface;
 extern const struct wl_interface ext_workspace_handle_v1_interface;
@@ -659,6 +665,7 @@ static void setfloating(Client *c, int floating);
 static void solux_apply_tag_layout(Client *c, Monitor *m, uint32_t tags);
 static void setfullscreen(Client *c, int fullscreen);
 static void setlayout(const Arg *arg);
+static void solux_setlayout_on(Monitor *m, const Layout *lt); /* смена раскладки конкретного монитора */
 static void setmfact(const Arg *arg);
 static void setmon(Client *c, Monitor *m, uint32_t newtags);
 static void setopacityunfocus(const Arg *arg);
@@ -1275,6 +1282,15 @@ arrange(Monitor *m)
 						: (m->lt[m->sellt]->arrange && c->isfloating)
 								? layers[LyrFloat]
 								: c->scene->node.parent);
+	}
+
+	/* Тени зависят от раскладки (Float/тайлинг) и тега: пересчитываем только при смене решения. */
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m || !c->shadow || !c->scene || !client_surface(c) || !client_surface(c)->mapped ||
+				client_is_unmanaged(c) || !VISIBLEON(c, m) || c->taganim_role == TAGANIM_OUT) /* пропускаем скрытые и уходящие */
+			continue;
+		if (client_shadow_wanted(c) != c->has_shadow_enabled) /* решение о тени изменилось */
+			update_client_shadow_color(c); /* применяем новое состояние тени */
 	}
 
 	if (m->lt[m->sellt]->arrange)
@@ -2863,39 +2879,41 @@ solux_animation_relayout(Monitor *m)
 	}
 }
 
-void
-setlayout(const Arg *arg)
+/* Единая смена раскладки монитора m (lt == NULL: переключить на предыдущую).
+ * Используется setlayout(), soluxctl и dwl-ipc: pertag, переходы Float<->тайлинг и анимации едины. */
+static void
+solux_setlayout_on(Monitor *m, const Layout *lt)
 {
 	const Layout *oldlt;
 	Client *c;
 
-	if (!selmon)
+	if (!m || !m->pertag) /* нет монитора или pertag */
 		return;
 
-	oldlt = selmon->lt[selmon->sellt];
-	if (!arg || !arg->v || arg->v != oldlt)
-		selmon->sellt = selmon->pertag->sellts[selmon->pertag->curtag] ^= 1;
-	if (arg && arg->v)
-		selmon->lt[selmon->sellt] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt] = (Layout *)arg->v;
+	oldlt = m->lt[m->sellt];
+	if (!lt || lt != oldlt) /* другая раскладка: переключаем слот sellt */
+		m->sellt = m->pertag->sellts[m->pertag->curtag] ^= 1;
+	if (lt) /* запоминаем раскладку и в pertag текущего тега */
+		m->lt[m->sellt] = m->pertag->ltidxs[m->pertag->curtag][m->sellt] = (Layout *)lt;
 
 	
 
-	if (!oldlt->arrange && selmon->lt[selmon->sellt]->arrange) {
+	if (!oldlt->arrange && m->lt[m->sellt]->arrange) { /* монитор m вместо selmon */
 		/* Leaving Float: capture the complete pre-layout state first.  Do not
 		 * call setfloating() here: it arranges immediately for every client, so
 		 * with several Float windows later clients could be converted against an
 		 * already partially-arranged monocle tree.  Convert the whole set first,
 		 * then run exactly one layout pass. */
 		wl_list_for_each(c, &clients, link) {
-			if (c->mon != selmon || !VISIBLEON(c, selmon) || c->isfullscreen ||
+			if (c->mon != m || !VISIBLEON(c, m) || c->isfullscreen || /* монитор m вместо selmon */
 					client_is_unmanaged(c))
 				continue;
 			c->canvas_saved_geom = c->geom;
 			c->canvas_saved_floating = c->isfloating;
 			c->has_canvas_saved_geom = true;
-			if (selmon->pertag->curtag <= TAGCOUNT) {
-				c->canvas_tag_geom[selmon->pertag->curtag] = c->geom;
-				c->canvas_tag_geom_valid |= (uint32_t)1u << selmon->pertag->curtag;
+			if (m->pertag->curtag <= TAGCOUNT) { /* монитор m вместо selmon */
+				c->canvas_tag_geom[m->pertag->curtag] = c->geom; /* монитор m вместо selmon */
+				c->canvas_tag_geom_valid |= (uint32_t)1u << m->pertag->curtag; /* монитор m вместо selmon */
 			}
 
 			if (c->canvas_visualized)
@@ -2913,38 +2931,46 @@ setlayout(const Arg *arg)
 			if (animations && !c->isnoanimation)
 				c->animation.current = c->geom;
 		}
-	} else if (oldlt->arrange && !selmon->lt[selmon->sellt]->arrange) {
+	} else if (oldlt->arrange && !m->lt[m->sellt]->arrange) { /* монитор m вместо selmon */
 		/* Returning to Float: restore the exact geometry each client had on
 		 * the canvas, animating from its current tiled geometry when enabled. */
 		wl_list_for_each(c, &clients, link) {
-			if (c->mon != selmon || !VISIBLEON(c, selmon) || c->isfullscreen ||
+			if (c->mon != m || !VISIBLEON(c, m) || c->isfullscreen || /* монитор m вместо selmon */
 					client_is_unmanaged(c) || !c->has_canvas_saved_geom)
 				continue;
 			c->isfloating = c->canvas_saved_floating;
 			if (animations && !c->isnoanimation && !c->animation.running)
 				c->animation.current = c->geom;
 			resize(c, c->canvas_saved_geom, 0);
-			if (selmon->pertag->curtag <= TAGCOUNT) {
-				c->canvas_tag_geom[selmon->pertag->curtag] = c->canvas_saved_geom;
-				c->canvas_tag_geom_valid |= (uint32_t)1u << selmon->pertag->curtag;
+			if (m->pertag->curtag <= TAGCOUNT) { /* монитор m вместо selmon */
+				c->canvas_tag_geom[m->pertag->curtag] = c->canvas_saved_geom; /* монитор m вместо selmon */
+				c->canvas_tag_geom_valid |= (uint32_t)1u << m->pertag->curtag; /* монитор m вместо selmon */
 			}
 			c->has_canvas_saved_geom = false;
 		}
 	}
 
-	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof(selmon->ltsymbol));
-	solux_animation_relayout(selmon);
+	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, sizeof(m->ltsymbol)); /* монитор m вместо selmon */
+	solux_animation_relayout(m); /* монитор m вместо selmon */
 
 	/* Returning to Float is a layout transition, not a focus transition, so
 	 * focusclient() is not necessarily called here.  Explicitly retarget the
 	 * canvas to the window that is already focused after its Float geometry has
 	 * been restored.  This preserves the existing animation/no-animation path. */
-	if (!selmon->lt[selmon->sellt]->arrange)
-		solux_canvas_focus_client(focustop(selmon));
+	if (!m->lt[m->sellt]->arrange) /* монитор m вместо selmon */
+		solux_canvas_focus_client(focustop(m)); /* монитор m вместо selmon */
 
 	printstatus();
-	dwl_ipc_output_printstatus(selmon);
-	ext_workspace_printstatus(selmon);
+	dwl_ipc_output_printstatus(m); /* монитор m вместо selmon */
+	ext_workspace_printstatus(m); /* монитор m вместо selmon */
+}
+
+void
+setlayout(const Arg *arg)
+{
+	if (!selmon) /* нет выбранного монитора */
+		return;
+	solux_setlayout_on(selmon, arg ? (const Layout *)arg->v : NULL); /* делегируем общей функции */
 }
 
 /* arg > 1.0 will set mfact absolutely */
