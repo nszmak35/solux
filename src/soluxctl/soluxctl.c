@@ -54,7 +54,7 @@ struct state {
     size_t nmonitors;
     size_t monitorcap;
 
-    uint32_t tag_amount;    /* число тегов, которое сообщил compositor */
+    uint32_t tag_amount;
     char *kblayout;
     enum mode mode;
     const char *workspace;
@@ -280,11 +280,6 @@ static void read_kblayout(struct state *s)
         fclose(f);
 }
 
-/*
- * Отправляет одну команду в управляющий сокет compositor-а и читает весь ответ.
- * Возвращает 0 при ответе "OK" (текст после первой строки кладёт в out),
- * иначе -1 и описание ошибки в err. Ничего не печатает и не завершает процесс.
- */
 static int control_request(const char *command, char *out, size_t outsz,
                            char *err, size_t errsz)
 {
@@ -306,7 +301,6 @@ static int control_request(const char *command, char *out, size_t outsz,
         return -1;
     }
 
-    /* Не зависаем навсегда, если compositor не отвечает. */
     tv.tv_sec = 3;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -337,7 +331,6 @@ static int control_request(const char *command, char *out, size_t outsz,
         return -1;
     }
 
-    /* Читаем ответ до закрытия соединения compositor-ом. */
     while (len < sizeof(buf) - 1) {
         n = read(fd, buf + len, sizeof(buf) - 1 - len);
         if (n < 0 && errno == EINTR)
@@ -359,7 +352,6 @@ static int control_request(const char *command, char *out, size_t outsz,
         return -1;
     }
 
-    /* Всё после первой строки - полезная нагрузка (списки имён). */
     body = strchr(buf, '\n');
     if (out && outsz) {
         if (body)
@@ -370,7 +362,6 @@ static int control_request(const char *command, char *out, size_t outsz,
     return 0;
 }
 
-/* Команда без полезной нагрузки: при ошибке завершает процесс с понятным сообщением. */
 static int control_command(const char *command)
 {
     char err[512];
@@ -380,11 +371,6 @@ static int control_command(const char *command)
     return 0;
 }
 
-/*
- * Подставляет настоящие имена тегов из compositor-а (tags в config.py).
- * dwl-ipc сообщает только их количество, поэтому без этого имена были бы "1".."N".
- * Если compositor не ответил, остаются числовые имена.
- */
 static void load_tag_names(struct state *s)
 {
     char out[4096];
@@ -763,8 +749,6 @@ static void registry_global(void *data, struct wl_registry *registry,
             wl_registry_bind(registry, name, &wl_output_interface, v);
         struct monitor *m = add_monitor(i->state, output, name);
 
-        /* Монитор подключили, пока watch уже работает: сразу привязываем его
-         * к IPC, иначе он останется без тегов и событий. */
         if (i->manager && i->state->tag_amount) {
             m->tags = calloc(i->state->tag_amount, sizeof(struct taginfo));
             if (!m->tags)
@@ -832,7 +816,6 @@ static int ipc_connect(struct ipc *i, struct state *s)
     if (wl_display_roundtrip(i->display) < 0)
         return -1;
 
-    /* Настоящие имена тегов берём у compositor-а, а не из устаревшего config.dnx. */
     load_tag_names(s);
 
     return 0;
@@ -889,10 +872,6 @@ static void set_workspace(const char *name)
     state_free(&s);
 }
 
-/*
- * Смена раскладки окон. Имя разбирает сам compositor по словарю layouts из config.py,
- * поэтому оно всегда совпадает с настоящим. Пустое имя - следующая раскладка по кругу.
- */
 static void set_layout(const char *name)
 {
     char cmd[4200];
@@ -905,7 +884,6 @@ static void set_layout(const char *name)
     control_command(cmd);
 }
 
-/* Смена раскладки клавиатуры по кругу (как нажатие хоткея переключения). */
 static void set_kblayout(void)
 {
     control_command("KBLAYOUT NEXT");
@@ -1065,7 +1043,6 @@ int main(int argc, char **argv)
         char *v;
         size_t i;
 
-        /* Без аргумента layouts из конфига переключаются по кругу. */
         if (argc == 2) {
             set_layout(NULL);
             return 0;
@@ -1077,7 +1054,6 @@ int main(int argc, char **argv)
             strncat(value, argv[i], sizeof(value) - strlen(value) - 1);
         }
 
-        /* Перевод строки в имени сломал бы протокол сокета. */
         if (strpbrk(value, "\r\n"))
             die("layout name must not contain a newline");
 
@@ -1085,7 +1061,6 @@ int main(int argc, char **argv)
         if (!*v)
             die("layout name is empty");
 
-        /* Скобки вида [ monocle ] compositor отбросит сам. */
         set_layout(v);
         return 0;
     }

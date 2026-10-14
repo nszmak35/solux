@@ -10,106 +10,102 @@ soluxctl_write_reply(int fd, const char *reply)
 	return n == (ssize_t)len ? 0 : -1;
 }
 
-/* Приводит имя раскладки к виду без пробелов и скобок: "[ monocle ]" -> "monocle". */
 static void
 soluxctl_norm_name(const char *in, char *out, size_t outsz)
 {
-	const char *p = in ? in : ""; /* начало имени */
-	const char *q; /* конец имени */
-	size_t len; /* длина результата */
+	const char *p = in ? in : "";
+	const char *q;
+	size_t len;
 
-	if (!outsz) /* некуда писать */
+	if (!outsz)
 		return;
-	while (isspace((unsigned char)*p)) /* пробелы в начале */
+	while (isspace((unsigned char)*p))
 		p++;
 	q = p + strlen(p);
-	while (q > p && isspace((unsigned char)q[-1])) /* пробелы в конце */
+	while (q > p && isspace((unsigned char)q[-1]))
 		q--;
-	if (q - p >= 2 && *p == '[' && q[-1] == ']') { /* убираем квадратные скобки */
+	if (q - p >= 2 && *p == '[' && q[-1] == ']') {
 		p++;
 		q--;
-		while (p < q && isspace((unsigned char)*p)) /* пробелы внутри скобок слева */
+		while (p < q && isspace((unsigned char)*p))
 			p++;
-		while (q > p && isspace((unsigned char)q[-1])) /* пробелы внутри скобок справа */
+		while (q > p && isspace((unsigned char)q[-1]))
 			q--;
 	}
 	len = (size_t)(q - p);
-	if (len >= outsz) /* обрезаем под буфер */
+	if (len >= outsz)
 		len = outsz - 1;
 	memcpy(out, p, len);
 	out[len] = '\0';
 }
 
-/* Ищет раскладку по имени из словаря layouts конфига (без учёта регистра и скобок). */
 static int
 soluxctl_layout_find(const char *name)
 {
-	char want[128], have[128]; /* нормализованные имена */
+	char want[128], have[128];
 	size_t i;
 
 	soluxctl_norm_name(name, want, sizeof(want));
-	if (!*want) /* пустое имя */
+	if (!*want)
 		return -1;
 	for (i = 0; i < layouts_len; i++) {
-		if (!layouts[i].symbol) /* раскладка без имени */
+		if (!layouts[i].symbol)
 			continue;
 		soluxctl_norm_name(layouts[i].symbol, have, sizeof(have));
-		if (!strcasecmp(have, want)) /* имя совпало */
+		if (!strcasecmp(have, want))
 			return (int)i;
 	}
 	return -1;
 }
 
-/* SET-LAYOUT [имя]: без имени - следующая раскладка по кругу, с именем - именно эта. */
 static void
 soluxctl_cmd_set_layout(int cfd, const char *arg)
 {
-	char msg[256]; /* текст ошибки */
-	char shown[128]; /* имя для сообщения */
-	int idx; /* индекс найденной раскладки */
+	char msg[256];
+	char shown[128];
+	int idx;
 
-	while (isspace((unsigned char)*arg)) /* пропускаем пробелы после команды */
+	while (isspace((unsigned char)*arg))
 		arg++;
-	if (!selmon || !selmon->pertag) { /* нет активного монитора */
+	if (!selmon || !selmon->pertag) {
 		soluxctl_write_reply(cfd, "ERR no active monitor\n");
 		return;
 	}
-	if (!layouts_len) { /* в конфиге нет раскладок */
+	if (!layouts_len) {
 		soluxctl_write_reply(cfd, "ERR no layouts configured\n");
 		return;
 	}
-	if (!*arg) { /* без аргумента: цикл по раскладкам из конфига */
+	if (!*arg) {
 		Arg next = {.i = 1};
 		cyclelayout(&next);
 		soluxctl_write_reply(cfd, "OK\n");
 		return;
 	}
 	idx = soluxctl_layout_find(arg);
-	if (idx < 0) { /* такой раскладки нет в конфиге */
+	if (idx < 0) {
 		soluxctl_norm_name(arg, shown, sizeof(shown));
 		snprintf(msg, sizeof(msg), "ERR layout '%s' does not exist\n", shown);
 		soluxctl_write_reply(cfd, msg);
 		return;
 	}
-	solux_setlayout_on(selmon, &layouts[idx]); /* тот же путь, что и у setlayout() */
+	solux_setlayout_on(selmon, &layouts[idx]);
 	soluxctl_write_reply(cfd, "OK\n");
 }
 
-/* LAYOUTS / TAGS: "OK" и затем по одному имени на строку. */
 static void
 soluxctl_cmd_list(int cfd, int tags_list)
 {
-	char out[4096]; /* буфер ответа */
-	size_t len = 0, i, count; /* занято, индекс, сколько имён */
-	int n; /* результат snprintf */
+	char out[4096];
+	size_t len = 0, i, count;
+	int n;
 
 	n = snprintf(out, sizeof(out), "OK\n");
 	len = (n > 0) ? (size_t)n : 0;
 	count = tags_list ? tagcount : layouts_len;
 	for (i = 0; i < count; i++) {
-		const char *name = tags_list ? tags[i] : layouts[i].symbol; /* имя элемента */
+		const char *name = tags_list ? tags[i] : layouts[i].symbol;
 		n = snprintf(out + len, sizeof(out) - len, "%s\n", name ? name : "");
-		if (n < 0 || (size_t)n >= sizeof(out) - len) /* не помещается - останавливаемся */
+		if (n < 0 || (size_t)n >= sizeof(out) - len)
 			break;
 		len += (size_t)n;
 	}
@@ -152,18 +148,17 @@ soluxctl_handle_fd(int fd, uint32_t mask, void *data)
 		reload_config(&arg);
 		soluxctl_write_reply(cfd, "OK\n");
 	} else if (!strcasecmp(buf, "KBLAYOUT NEXT") || !strcasecmp(buf, "SET-KBLAYOUT")) {
-		/* Следующая раскладка клавиатуры по кругу (из keyboard_layout, например "us,ru") */
-		if (solux_kblayout_step(1) < 0) /* клавиатура ещё не готова */
+		if (solux_kblayout_step(1) < 0)
 			soluxctl_write_reply(cfd, "ERR keyboard is not ready\n");
 		else
 			soluxctl_write_reply(cfd, "OK\n");
 	} else if (!strncasecmp(buf, "SET-LAYOUT", 10) &&
 			(buf[10] == '\0' || isspace((unsigned char)buf[10]))) {
-		soluxctl_cmd_set_layout(cfd, buf + 10); /* смена раскладки окон по имени или по кругу */
+		soluxctl_cmd_set_layout(cfd, buf + 10);
 	} else if (!strcasecmp(buf, "LAYOUTS")) {
-		soluxctl_cmd_list(cfd, 0); /* список имён раскладок из конфига */
+		soluxctl_cmd_list(cfd, 0);
 	} else if (!strcasecmp(buf, "TAGS")) {
-		soluxctl_cmd_list(cfd, 1); /* список имён тегов из конфига */
+		soluxctl_cmd_list(cfd, 1);
 	} else if (!strcasecmp(buf, "PING")) {
 		soluxctl_write_reply(cfd, "OK\n");
 	} else {

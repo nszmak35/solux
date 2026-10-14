@@ -160,11 +160,10 @@ dwl_ipc_output_set_layout(struct wl_client *client, struct wl_resource *resource
 		return;
 
 	monitor = ipc_output->mon;
-	if (!monitor || index >= layouts_len) /* нет монитора или неверный индекс */
+	if (!monitor || index >= layouts_len)
 		return;
 
-	/* Тот же путь, что и у setlayout(): pertag, переходы Float<->тайлинг, анимации. */
-	solux_setlayout_on(monitor, &layouts[index]); /* единая смена раскладки монитора */
+	solux_setlayout_on(monitor, &layouts[index]);
 }
 
 void
