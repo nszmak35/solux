@@ -204,25 +204,65 @@ destroykeyboardgroup(struct wl_listener *listener, void *data)
 	free(group);
 }
 
+static int
+solux_kblayout_step(int delta)
+{
+	struct keyboard_group_device {
+		struct wlr_keyboard *keyboard;
+		struct wl_listener key;
+		struct wl_listener modifiers;
+		struct wl_listener keymap;
+		struct wl_listener repeat_info;
+		struct wl_listener destroy;
+		struct wl_list link;
+	} *device;
+	struct wlr_keyboard *keyboard;
+	xkb_layout_index_t nlayouts, cur, next;
+	int step;
+
+	if (!kb_group || !kb_group->wlr_group)
+		return -1;
+	keyboard = &kb_group->wlr_group->keyboard;
+	if (!keyboard->keymap || !keyboard->xkb_state)
+		return -1;
+
+	nlayouts = xkb_keymap_num_layouts(keyboard->keymap);
+	if (nlayouts <= 1)
+		return 0;
+
+	step = delta % (int)nlayouts;
+	if (step < 0)
+		step += (int)nlayouts;
+	if (step == 0)
+		return 0;
+
+	cur = keyboard->modifiers.group;
+	if (cur >= nlayouts)
+		cur = 0;
+	next = (cur + (xkb_layout_index_t)step) % nlayouts;
+
+	wl_list_for_each(device, &kb_group->wlr_group->devices, link) {
+		if (!device->keyboard || !device->keyboard->xkb_state)
+			continue;
+		wlr_keyboard_notify_modifiers(device->keyboard,
+			device->keyboard->modifiers.depressed,
+			device->keyboard->modifiers.latched,
+			device->keyboard->modifiers.locked, next);
+	}
+
+	wlr_keyboard_notify_modifiers(keyboard, keyboard->modifiers.depressed,
+		keyboard->modifiers.latched, keyboard->modifiers.locked, next);
+
+	current_kblayout = next;
+	kblayout_idx = next;
+	kblayout(kb_group);
+	return 0;
+}
+
 void
 incxkbrules(const Arg *arg)
 {
-	{
-		unsigned int nlayouts = 1;
-		char *p = xkb_rules.layout;
-		if (p) {
-			for (; *p; p++)
-				if (*p == ',')
-					nlayouts++;
-		}
-		if (nlayouts)
-			current_kblayout = (current_kblayout + arg->i + nlayouts) % nlayouts;
-	}
-	assignkeymap(&kb_group->wlr_group->keyboard);
-
-	/* This path changes the XKB group without a keyboard event. Publish it
-	 * immediately so status consumers see the new layout even on the root. */
-	kblayout(kb_group);
+	solux_kblayout_step(arg && arg->i ? arg->i : 1);
 }
 
 static void

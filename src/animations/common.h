@@ -109,7 +109,14 @@ static double solux_animation_factor(double t, int type)
 	return p[hi].y;
 }
 
-static uint64_t solux_animation_now_ms(void)
+/* Time of the frame being built (0 outside of rendermon).  Every animation of
+ * one frame -- windows, camera, tag switch -- is sampled at the same instant.
+ * Sampling the clock separately for each of them shifted the windows against
+ * the camera by a few milliseconds per frame, which shows up as jitter in
+ * screen recordings, where frames are already delivered unevenly. */
+static uint64_t solux_frame_clock_ms;
+
+static uint64_t solux_animation_real_ms(void)
 {
 	/* Keep the public animation state in milliseconds, but sample the clock with
 	 * nanosecond precision before converting. This avoids visible quantisation
@@ -117,6 +124,11 @@ static uint64_t solux_animation_now_ms(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static uint64_t solux_animation_now_ms(void)
+{
+	return solux_frame_clock_ms ? solux_frame_clock_ms : solux_animation_real_ms();
 }
 
 

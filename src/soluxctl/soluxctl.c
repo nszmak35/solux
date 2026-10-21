@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -53,6 +54,7 @@ struct state {
     size_t nmonitors;
     size_t monitorcap;
 
+    uint32_t tag_amount;
     char *kblayout;
     enum mode mode;
     const char *workspace;
@@ -122,21 +124,6 @@ static char *trim(char *s)
                      e[-1] == '\r' || e[-1] == '\n'))
         *--e = '\0';
     return s;
-}
-
-static char *config_path(void)
-{
-    const char *env = getenv("SOLUX_DNX_CONFIG");
-    const char *home = getenv("HOME");
-    static char path[PATH_MAX];
-
-    if (env && *env)
-        return xstrdup(env);
-    if (home && *home) {
-        snprintf(path, sizeof(path), "%s/.config/solux/config.dnx", home);
-        return xstrdup(path);
-    }
-    return xstrdup("./config.dnx");
 }
 
 static char *socket_path(void)
@@ -278,62 +265,10 @@ static struct monitor *active_monitor(const struct state *s)
     return s->nmonitors ? s->monitors[0] : NULL;
 }
 
-static void load_config_names(struct state *s, const char *path)
-{
-    FILE *f;
-    char line[8192];
-    int in_tags = 0;
-    int in_layouts = 0;
-
-    f = fopen(path, "r");
-    if (!f)
-        return;
-
-    while (fgets(line, sizeof(line), f)) {
-        char *p = trim(line);
-
-        if (*p == ':') {
-            in_tags = 0;
-            in_layouts = 0;
-            continue;
-        }
-
-        if (!strcmp(p, "*tags")) {
-            in_tags = 1;
-            in_layouts = 0;
-            continue;
-        }
-
-        if (!strcmp(p, "%layouts")) {
-            in_tags = 0;
-            in_layouts = 1;
-            continue;
-        }
-
-        if (*p == '*' || *p == '%')
-            continue;
-
-        if ((in_tags || in_layouts) && *p == '"') {
-            char *end = strchr(p + 1, '"');
-            if (!end)
-                continue;
-            *end = '\0';
-            if (in_tags)
-                add_tag_name(s, p + 1);
-            else
-                add_layout_name(s, p + 1);
-        }
-    }
-
-    fclose(f);
-}
-
-static void read_kblayout(struct state *s, const char *config)
+static void read_kblayout(struct state *s)
 {
     char buf[1024];
     FILE *f;
-
-    (void)config;
 
     f = fopen(KBLAYOUT_FILE, "r");
     if (f && fgets(buf, sizeof(buf), f))
@@ -345,47 +280,115 @@ static void read_kblayout(struct state *s, const char *config)
         fclose(f);
 }
 
-static int control_command(const char *command);
-
-static int control_command(const char *command)
+static int control_request(const char *command, char *out, size_t outsz,
+                           char *err, size_t errsz)
 {
     struct sockaddr_un addr;
-    char buf[512];
-    ssize_t n;
+    struct timeval tv;
+    char buf[4096];
+    size_t len = 0;
     char *path;
+    char *body;
+    ssize_t n;
     int fd;
 
+    if (out && outsz)
+        out[0] = '\0';
+
     fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-    if (fd < 0)
-        die("cannot create control socket: %s", strerror(errno));
+    if (fd < 0) {
+        snprintf(err, errsz, "cannot create control socket: %s", strerror(errno));
+        return -1;
+    }
+
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     path = socket_path();
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
 
     if (snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path) >=
-        (int)sizeof(addr.sun_path))
-        die("control socket path is too long");
-
+        (int)sizeof(addr.sun_path)) {
+        free(path);
+        close(fd);
+        snprintf(err, errsz, "control socket path is too long");
+        return -1;
+    }
     free(path);
 
-    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
-        die("cannot connect to solux: %s", strerror(errno));
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        snprintf(err, errsz, "cannot connect to solux: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
 
-    if (dprintf(fd, "%s\n", command) < 0)
-        die("cannot send command: %s", strerror(errno));
+    if (dprintf(fd, "%s\n", command) < 0) {
+        snprintf(err, errsz, "cannot send command: %s", strerror(errno));
+        close(fd);
+        return -1;
+    }
 
-    n = read(fd, buf, sizeof(buf) - 1);
-    if (n <= 0)
-        die("solux closed the control connection");
-
-    buf[n] = '\0';
+    while (len < sizeof(buf) - 1) {
+        n = read(fd, buf + len, sizeof(buf) - 1 - len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        len += (size_t)n;
+    }
     close(fd);
 
-    if (strncmp(buf, "OK", 2) != 0)
-        die("solux: %s", trim(buf));
+    if (!len) {
+        snprintf(err, errsz, "solux closed the control connection");
+        return -1;
+    }
+    buf[len] = '\0';
 
+    if (strncmp(buf, "OK", 2) != 0) {
+        snprintf(err, errsz, "solux: %s", trim(buf));
+        return -1;
+    }
+
+    body = strchr(buf, '\n');
+    if (out && outsz) {
+        if (body)
+            snprintf(out, outsz, "%s", body + 1);
+        else
+            out[0] = '\0';
+    }
     return 0;
+}
+
+static int control_command(const char *command)
+{
+    char err[512];
+
+    if (control_request(command, NULL, 0, err, sizeof(err)) < 0)
+        die("%s", err);
+    return 0;
+}
+
+static void load_tag_names(struct state *s)
+{
+    char out[4096];
+    char err[256];
+    char *line;
+    char *save = NULL;
+    size_t i = 0;
+
+    if (control_request("TAGS", out, sizeof(out), err, sizeof(err)) < 0)
+        return;
+
+    for (line = strtok_r(out, "\n", &save); line && i < s->ntags;
+         line = strtok_r(NULL, "\n", &save), i++) {
+        if (!*line)
+            continue;
+        free(s->tags[i]);
+        s->tags[i] = xstrdup(line);
+    }
 }
 
 static void monitor_json(const struct monitor *m, const struct state *s)
@@ -687,6 +690,8 @@ static void manager_tags(void *data, struct zdwl_ipc_manager_v2 *manager,
 
     (void)manager;
 
+    s->tag_amount = amount;
+
     for (i = 0; i < s->nmonitors; i++) {
         free(s->monitors[i]->tags);
         s->monitors[i]->tags = calloc(amount, sizeof(struct taginfo));
@@ -707,11 +712,6 @@ static void manager_layout(void *data, struct zdwl_ipc_manager_v2 *manager,
 {
     struct state *s = data;
     (void)manager;
-
-    if (s->nlayouts < s->layoutcap) {
-        add_layout_name(s, name);
-        return;
-    }
 
     add_layout_name(s, name);
 }
@@ -747,7 +747,15 @@ static void registry_global(void *data, struct wl_registry *registry,
         uint32_t v = version < 4 ? version : 4;
         struct wl_output *output =
             wl_registry_bind(registry, name, &wl_output_interface, v);
-        add_monitor(i->state, output, name);
+        struct monitor *m = add_monitor(i->state, output, name);
+
+        if (i->manager && i->state->tag_amount) {
+            m->tags = calloc(i->state->tag_amount, sizeof(struct taginfo));
+            if (!m->tags)
+                die("out of memory");
+            m->ntags = i->state->tag_amount;
+            bind_monitor(i, m);
+        }
     }
 }
 
@@ -808,6 +816,8 @@ static int ipc_connect(struct ipc *i, struct state *s)
     if (wl_display_roundtrip(i->display) < 0)
         return -1;
 
+    load_tag_names(s);
+
     return 0;
 }
 
@@ -816,53 +826,6 @@ static void ipc_disconnect(struct ipc *i)
     if (i->display)
         wl_display_disconnect(i->display);
     memset(i, 0, sizeof(*i));
-}
-
-static int layout_index(struct state *s, const char *name)
-{
-    size_t i;
-    char wanted[4096];
-
-    if (!name)
-        return -1;
-
-    snprintf(wanted, sizeof(wanted), "%s", name);
-    {
-        char *v = trim(wanted);
-        size_t n = strlen(v);
-
-        if (n >= 2 && v[0] == '[' && v[n - 1] == ']') {
-            v[n - 1] = '\0';
-            v = trim(v + 1);
-            memmove(wanted, v, strlen(v) + 1);
-        }
-    }
-
-    for (i = 0; i < s->nlayouts; i++) {
-        char stored[4096];
-        char *v;
-        size_t n;
-
-        if (!s->layouts[i])
-            continue;
-
-        if (!strcmp(s->layouts[i], name))
-            return (int)i;
-
-        snprintf(stored, sizeof(stored), "%s", s->layouts[i]);
-        v = trim(stored);
-        n = strlen(v);
-
-        if (n >= 2 && v[0] == '[' && v[n - 1] == ']') {
-            v[n - 1] = '\0';
-            v = trim(v + 1);
-        }
-
-        if (!strcasecmp(v, wanted))
-            return (int)i;
-    }
-
-    return -1;
 }
 
 static int tag_index(struct state *s, const char *name)
@@ -909,64 +872,36 @@ static void set_workspace(const char *name)
     state_free(&s);
 }
 
-static int set_layout(const char *name)
+static void set_layout(const char *name)
 {
-    struct state s = {0};
-    struct ipc i;
-    struct monitor *m;
-    int index;
+    char cmd[4200];
 
-    /*
-     * Layout names are defined by config.dnx. Load them before connecting
-     * to IPC so set-layout can resolve the user's name even when the IPC
-     * manager does not send the layout list (or sends only symbols).
-     */
-    {
-        char *config = config_path();
-        load_config_names(&s, config);
-        free(config);
-    }
+    if (name && *name)
+        snprintf(cmd, sizeof(cmd), "SET-LAYOUT %s", name);
+    else
+        snprintf(cmd, sizeof(cmd), "SET-LAYOUT");
 
-    if (ipc_connect(&i, &s) < 0)
-        die("dwl IPC is unavailable");
-
-    index = layout_index(&s, name);
-    if (index < 0)
-        die("layout '%s' does not exist", name);
-
-    m = active_monitor(&s);
-    if (!m || !m->ipc_output)
-        die("no active monitor");
-
-    zdwl_ipc_output_v2_set_layout(m->ipc_output, (uint32_t)index);
-    if (wl_display_flush(i.display) < 0 && errno != EAGAIN)
-        die("cannot send layout request: %s", strerror(errno));
-
-    wl_display_roundtrip(i.display);
-    ipc_disconnect(&i);
-    state_free(&s);
-    return 0;
+    control_command(cmd);
 }
 
-static void watch_ipc(const char *config, enum mode mode,
-                      const char *workspace)
+static void set_kblayout(void)
+{
+    control_command("KBLAYOUT NEXT");
+}
+
+static void watch_ipc(enum mode mode, const char *workspace)
 {
     struct state s = {0};
     struct ipc i;
     int fd;
-    char last_kb[1024] = "";
 
     s.mode = mode;
     s.workspace = workspace;
 
-    load_config_names(&s, config);
-
     if (ipc_connect(&i, &s) < 0)
         die("dwl IPC is unavailable");
 
-    read_kblayout(&s, config);
-    if (s.kblayout)
-        snprintf(last_kb, sizeof(last_kb), "%s", s.kblayout);
+    read_kblayout(&s);
 
     fd = wl_display_get_fd(i.display);
 
@@ -993,7 +928,7 @@ static void watch_ipc(const char *config, enum mode mode,
 
         if (mode == MODE_ALL) {
             char *old = s.kblayout ? xstrdup(s.kblayout) : xstrdup("");
-            read_kblayout(&s, config);
+            read_kblayout(&s);
             if (strcmp(old, s.kblayout ? s.kblayout : ""))
                 s.dirty = 1;
             free(old);
@@ -1002,11 +937,6 @@ static void watch_ipc(const char *config, enum mode mode,
         if (s.dirty) {
             emit_mode(&s);
             s.dirty = 0;
-        }
-
-        if (mode == MODE_ALL && s.kblayout &&
-            strcmp(last_kb, s.kblayout)) {
-            snprintf(last_kb, sizeof(last_kb), "%s", s.kblayout);
         }
     }
 
@@ -1046,7 +976,8 @@ static void usage(void)
     puts("  soluxctl help");
     puts("  soluxctl reconfig");
     puts("  soluxctl set-workspace <name_tag>");
-    puts("  soluxctl set-layout <layout>");
+    puts("  soluxctl set-layout [layout]   (no argument: next layout from the config)");
+    puts("  soluxctl set-kblayout          (next keyboard layout, e.g. us -> ru -> us)");
     puts("  soluxctl watch-layout");
     puts("  soluxctl watch-kblayout");
     puts("  soluxctl watch-monitor");
@@ -1060,7 +991,6 @@ static void usage(void)
 int main(int argc, char **argv)
 {
     const char *cmd;
-    char *config;
 
     progname = argv[0];
 
@@ -1091,24 +1021,32 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    if (!strcmp(cmd, "set-kblayout")) {
+        if (argc != 2)
+            die("usage: soluxctl set-kblayout");
+        set_kblayout();
+        return 0;
+    }
+
     if (!strcmp(cmd, "watch-kblayout")) {
         watch_kblayout();
         return 0;
     }
 
     if (!strcmp(cmd, "watch-layout")) {
-        config = config_path();
-        watch_ipc(config, MODE_LAYOUT, NULL);
-        free(config);
+        watch_ipc(MODE_LAYOUT, NULL);
         return 0;
     }
 
     if (!strcmp(cmd, "set-layout")) {
         char value[4096] = "";
+        char *v;
         size_t i;
 
-        if (argc < 3)
-            die("usage: soluxctl set-layout \"[ dwindle ]\"");
+        if (argc == 2) {
+            set_layout(NULL);
+            return 0;
+        }
 
         for (i = 2; i < (size_t)argc; i++) {
             if (i > 2)
@@ -1116,51 +1054,36 @@ int main(int argc, char **argv)
             strncat(value, argv[i], sizeof(value) - strlen(value) - 1);
         }
 
-        if (value[0] == '\0')
+        if (strpbrk(value, "\r\n"))
+            die("layout name must not contain a newline");
+
+        v = trim(value);
+        if (!*v)
             die("layout name is empty");
 
-        /* Accept both [ dwindle ] and dwindle. */
-        {
-            char *v = trim(value);
-            size_t n = strlen(v);
-            if (n >= 2 && v[0] == '[' && v[n - 1] == ']') {
-                v[n - 1] = '\0';
-                v = trim(v + 1);
-            }
-            if (!*v)
-                die("layout name is empty");
-            set_layout(v);
-        }
+        set_layout(v);
         return 0;
     }
 
     if (!strcmp(cmd, "watch-monitor")) {
-        config = config_path();
-        watch_ipc(config, MODE_MONITOR, NULL);
-        free(config);
+        watch_ipc(MODE_MONITOR, NULL);
         return 0;
     }
 
     if (!strcmp(cmd, "watch-focus")) {
-        config = config_path();
-        watch_ipc(config, MODE_FOCUS, NULL);
-        free(config);
+        watch_ipc(MODE_FOCUS, NULL);
         return 0;
     }
 
     if (!strcmp(cmd, "watch-all")) {
-        config = config_path();
-        watch_ipc(config, MODE_ALL, NULL);
-        free(config);
+        watch_ipc(MODE_ALL, NULL);
         return 0;
     }
 
     if (!strcmp(cmd, "watch-workspace")) {
         if (argc != 3)
             die("usage: soluxctl watch-workspace <name_tag>");
-        config = config_path();
-        watch_ipc(config, MODE_WORKSPACE, argv[2]);
-        free(config);
+        watch_ipc(MODE_WORKSPACE, argv[2]);
         return 0;
     }
 

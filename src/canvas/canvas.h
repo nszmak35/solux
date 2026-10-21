@@ -198,6 +198,38 @@ solux_canvas_screen_to_world(Monitor *m, double sx, double sy, double *wx, doubl
 
 
 /*
+ * A window dropped on another monitor keeps the spot where it was released.
+ * Client::geom is world geometry of the monitor's own camera, so reusing the
+ * old numbers on the new monitor would make it jump by the difference of the
+ * two cameras.  Keep the on-screen centre and the world size.
+ */
+static void
+solux_canvas_transfer_client(Client *c, Monitor *newmon)
+{
+	Monitor *old;
+	struct wlr_box visual, g;
+	double wx, wy;
+
+	if (!c || !newmon || !(old = c->mon) || old == newmon ||
+		c->isfullscreen || !c->isfloating || client_is_unmanaged(c) ||
+		!solux_canvas_active(old) || !solux_canvas_active(newmon))
+		return;
+
+	visual = solux_canvas_world_to_screen(old, c->geom);
+	solux_canvas_screen_to_world(newmon,
+		visual.x + visual.width / 2.0, visual.y + visual.height / 2.0, &wx, &wy);
+	g = c->geom;
+	g.x = (int)lround(wx - g.width / 2.0);
+	g.y = (int)lround(wy - g.height / 2.0);
+
+	c->geom = g;
+	/* Positions are final: no MOVE animation from the old camera's numbers. */
+	c->animation.running = false;
+	c->animation.action = SOLUX_ANIM_MOVE;
+	c->animation.initial = c->animation.current = c->animation.target = g;
+}
+
+/*
  * Canvas decorations are screen-space decorations.  Never feed Canvas
  * coordinates back into Client::geom or the global border configuration.
  * The latter was the source of the Float/Chromium border drift: Canvas used
@@ -357,7 +389,7 @@ solux_canvas_apply_client(Client *c)
 		wlr_scene_blur_set_clipped_region(c->blur, (struct clipped_region){
 			.corners = corner_radii_all(radius), .area = {0, 0, visual.width, visual.height}});
 	}
-	if (c->shadow) client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+	if (c->shadow) client_refresh_shadow(c);
 }
 
 static void
@@ -378,7 +410,7 @@ solux_canvas_restore_client(Client *c)
 		wlr_scene_blur_set_clipped_region(c->blur, (struct clipped_region) {
 			.corners = corner_radii_all(radius), .area = {0, 0, c->geom.width, c->geom.height}});
 	}
-	if (c->shadow) client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+	if (c->shadow) client_refresh_shadow(c);
 	c->canvas_visualized = false;
 }
 
@@ -397,6 +429,182 @@ solux_canvas_apply(Monitor *m)
 	}
 }
 
+/*
+ * Sharp text while zoomed in.
+ *
+ * The canvas stretches the buffer a client rendered, so past 1x text turns
+ * soft.  To keep it crisp the client is asked to render at a larger buffer
+ * scale (fractional-scale + preferred buffer scale), as if the output had that
+ * scale.  The size on screen never changes: the scene draws every buffer at an
+ * explicit destination size derived from the window's world geometry, so only
+ * the amount of detail does.
+ *
+ * Zoomed out works the same way (a smaller buffer shrinks cleanly instead of
+ * being skimmed by the filter).  It is done gently, because every change makes
+ * the client redraw itself:
+ *   - only clients that use wp_viewporter are touched: they keep their logical
+ *     size whatever buffer scale they render at, so the window can never change
+ *     size; others are simply scaled by the compositor
+ *   - the scale snaps to a few steps, and up to ~12% of stretching is left alone
+ *   - nothing happens while the camera moves or the zoom is still changing;
+ *     the scale follows once it has been still for a moment
+ *   - windows are updated a couple per frame, visible ones only, and never
+ *     while they are animating
+ */
+#define SOLUX_TEXT_SCALE_SETTLE_MS 250
+#define SOLUX_TEXT_SCALE_PER_FRAME 2
+
+static double
+solux_canvas_text_mult(double zoom)
+{
+	static const double levels[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0 };
+	const size_t n = sizeof(levels) / sizeof(levels[0]);
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (levels[i] >= zoom / 1.12)
+			return levels[i];
+	return levels[n - 1];
+}
+
+static void
+solux_canvas_scale_surface(struct wlr_surface *surface, int sx, int sy, void *data)
+{
+	(void)sx;
+	(void)sy;
+	client_set_scale(surface, *(float *)data);
+}
+
+/* Popups (and their sub-popups) follow the window's scale. */
+static void
+solux_canvas_scale_popups(struct wlr_xdg_surface *xdg, float scale, int depth)
+{
+	struct wlr_xdg_popup *popup;
+
+	if (!xdg || depth > 8)
+		return;
+	wl_list_for_each(popup, &xdg->popups, link) {
+		if (!popup->base || !popup->base->surface)
+			continue;
+		wlr_surface_for_each_surface(popup->base->surface,
+			solux_canvas_scale_surface, &scale);
+		solux_canvas_scale_popups(popup->base, scale, depth + 1);
+	}
+}
+
+/* Would applying `scale` to this client change anything? */
+static bool
+solux_canvas_scale_differs(Client *c, float scale)
+{
+	if (!c || !c->mon || !c->mon->wlr_output || !c->scene ||
+		client_is_unmanaged(c) || !client_surface(c))
+		return false;
+#ifdef XWAYLAND
+	/* Xwayland does not take its buffer scale from the compositor per window. */
+	if (client_is_x11(c))
+		return false;
+#endif
+	if (fabsf(c->canvas_buf_scale - scale) < 0.001f)
+		return false;
+	/* A different scale only for clients that keep their logical size by
+	 * themselves (viewporter); taking one back is always allowed. */
+	if (fabsf(scale - c->mon->wlr_output->scale) > 0.001f &&
+			!client_surface(c)->current.viewport.has_dst)
+		return false;
+	/* Nothing to restore for a client the canvas never touched. */
+	if (c->canvas_buf_scale == 0.0f &&
+			fabsf(scale - c->mon->wlr_output->scale) < 0.001f)
+		return false;
+	return true;
+}
+
+static void
+solux_canvas_apply_scale(Client *c, float scale)
+{
+	if (!solux_canvas_scale_differs(c, scale))
+		return;
+	c->canvas_buf_scale = scale;
+	wlr_surface_for_each_surface(client_surface(c), solux_canvas_scale_surface, &scale);
+	if (c->type == XDGShell && c->surface.xdg)
+		solux_canvas_scale_popups(c->surface.xdg, scale, 0);
+}
+
+static void
+solux_canvas_sync_buffer_scale(Monitor *m)
+{
+	Client *c;
+	uint64_t now;
+	double mult, base;
+	int budget = SOLUX_TEXT_SCALE_PER_FRAME;
+	bool settling = false, pending = false;
+
+	if (!m || !m->wlr_output || !m->wlr_output->enabled)
+		return;
+	base = m->wlr_output->scale > 0 ? m->wlr_output->scale : 1.0;
+	if (m->canvas_scale_mult <= 0.0)
+		m->canvas_scale_mult = 1.0;
+
+	if (!solux_canvas_active(m)) {
+		mult = 1.0;
+	} else {
+		now = solux_animation_now_ms();
+		mult = solux_canvas_text_mult(m->canvas_zoom);
+		if (m->canvas_animating || cursor_mode == CurCanvasMove ||
+				fabs(m->canvas_zoom - m->canvas_scale_seen_zoom) > 1e-6) {
+			m->canvas_scale_seen_zoom = m->canvas_zoom;
+			m->canvas_scale_settle_ms = now;
+		}
+		settling = m->canvas_animating || cursor_mode == CurCanvasMove ||
+			now - m->canvas_scale_settle_ms < SOLUX_TEXT_SCALE_SETTLE_MS;
+		if (settling && fabs(mult - m->canvas_scale_mult) > 1e-6) {
+			/* Wait for the camera to stop before changing the scale. */
+			pending = true;
+			mult = m->canvas_scale_mult;
+		}
+	}
+	m->canvas_scale_mult = mult;
+
+	wl_list_for_each(c, &clients, link) {
+		struct wlr_box visual, hit;
+		double want = base;
+
+		if (c->mon != m || !c->scene)
+			continue;
+		if (solux_canvas_active(m) && c->canvas_visualized && !c->isfullscreen &&
+				VISIBLEON(c, m)) {
+			want = base * mult;
+			if (want > 4.0 && base <= 4.0)
+				want = 4.0;
+		} else if (!solux_canvas_active(m) || c->isfullscreen) {
+			want = base;
+		} else {
+			continue;
+		}
+		if (!solux_canvas_scale_differs(c, (float)want))
+			continue;
+		/* Never while the window itself is animating. */
+		if (c->animation.running) {
+			pending = true;
+			continue;
+		}
+		/* Windows out of sight keep their scale until they come into view. */
+		if (want > c->canvas_buf_scale && solux_canvas_active(m)) {
+			visual = solux_canvas_world_to_screen(m, c->geom);
+			if (!wlr_box_intersection(&hit, &visual, &m->m))
+				continue;
+		}
+		if (budget <= 0) {
+			pending = true;
+			continue;
+		}
+		budget--;
+		solux_canvas_apply_scale(c, (float)want);
+	}
+
+	if (pending)
+		wlr_output_schedule_frame(m->wlr_output);
+}
+
 static void
 solux_canvas_frame(Monitor *m)
 {
@@ -405,6 +613,7 @@ solux_canvas_frame(Monitor *m)
 	if (!solux_canvas_active(m)) {
 		m->canvas_animating = false;
 		solux_canvas_apply(m);
+		solux_canvas_sync_buffer_scale(m);
 		solux_canvas_refresh_pointer();
 		return;
 	}
@@ -424,6 +633,7 @@ solux_canvas_frame(Monitor *m)
 			m->canvas_animating = false;
 	}
 	solux_canvas_apply(m);
+	solux_canvas_sync_buffer_scale(m);
 	/* Keep Wayland pointer coordinates in sync with the animated camera. */
 	solux_canvas_refresh_pointer();
 	if (m->canvas_animating) wlr_output_schedule_frame(m->wlr_output);
@@ -433,7 +643,7 @@ static void
 solux_canvas_start(Monitor *m, double x, double y, double zoomlevel)
 {
 	if (!m || !solux_canvas_active(m)) return;
-	zoomlevel = MAX(0.25, MIN(4.0, zoomlevel));
+	zoomlevel = MAX(0.3, MIN(4.0, zoomlevel));
 	m->canvas_target_x = x; m->canvas_target_y = y; m->canvas_target_zoom = zoomlevel;
 	if (!animations) {
 		m->canvas_x = x; m->canvas_y = y; m->canvas_zoom = zoomlevel; m->canvas_animating = false;
@@ -453,39 +663,141 @@ solux_canvas_start(Monitor *m, double x, double y, double zoomlevel)
 
 /*
  * Canvas buffers are rendered with a destination size larger/smaller than
- * their Wayland source size.  wlr_scene_node_at() reports coordinates in
- * that destination space, so without converting them back a zoomed window
- * receives pointer events at the wrong place.  Keep this conversion local to
- * the canvas and leave normal Float/tiled pointer coordinates untouched.
+ * their Wayland source size, and cropped to the window geometry.
+ * wlr_scene_node_at() reports coordinates in that destination space, so
+ * without converting them back a zoomed window receives pointer events at the
+ * wrong place -- and the error differs per surface, which is how hovering one
+ * element lit up its neighbours.
+ *
+ * The conversion is done from first principles for ANY surface of the
+ * toplevel (root or subsurface, e.g. the Firefox content area): the screen
+ * point is mapped through the same scale/crop the buffers were placed with
+ * (see nfloat_canvas_buffer_apply), then made relative to the surface.  It
+ * does not depend on the node that wlroots happened to hit.  Normal
+ * Float/tiled pointer coordinates are left untouched (returns false).
+ */
+/*
+ * Popups (menus, tooltips) are scaled with their window (see
+ * nfloat_canvas_popups), so the pointer position inside one is mapped back the
+ * same way as for the window itself: from the screen position of the popup's
+ * tree origin, which is the origin of its window geometry.
+ */
+static bool
+solux_canvas_popup_local(Client *c, struct wlr_surface *surface,
+	double px, double py, double *sx, double *sy)
+{
+	struct wlr_surface *root, *p;
+	struct wlr_xdg_popup *popup;
+	struct wlr_scene_tree *tree;
+	struct wlr_box geo;
+	double kx, ky;
+	int ox = 0, oy = 0, tx = 0, ty = 0, depth = 0;
+
+	if (!c || !surface || !sx || !sy || c->type != XDGShell)
+		return false;
+	kx = c->canvas_scale_x > 0.001 ? c->canvas_scale_x : 1.0;
+	ky = c->canvas_scale_y > 0.001 ? c->canvas_scale_y : 1.0;
+	/* Unscaled popups keep the coordinates wlroots computed. */
+	if (fabs(kx - 1.0) < 1e-6 && fabs(ky - 1.0) < 1e-6)
+		return false;
+
+	root = wlr_surface_get_root_surface(surface);
+	popup = wlr_xdg_popup_try_from_wlr_surface(root);
+	if (!popup || !popup->base)
+		return false;
+	/* The popup must belong to this window (directly or through other popups). */
+	for (p = popup->parent; p && p != client_surface(c) && depth < 16; depth++) {
+		struct wlr_xdg_popup *pp = wlr_xdg_popup_try_from_wlr_surface(p);
+
+		if (!pp)
+			return false;
+		p = pp->parent;
+	}
+	if (p != client_surface(c))
+		return false;
+
+	tree = root->data;
+	if (!tree || !nfloat_surface_root_offset(surface, root, &ox, &oy) ||
+		!wlr_scene_node_coords(&tree->node, &tx, &ty))
+		return false;
+
+	geo = popup->base->geometry;
+	*sx = geo.x + (px - tx) / kx - ox;
+	*sy = geo.y + (py - ty) / ky - oy;
+	return true;
+}
+
+/*
+ * The box a new popup is kept inside, in the surface coordinates of its
+ * toplevel.  On the zoomed canvas that is the monitor as seen through the
+ * camera -- the popup will be shown scaled -- not the monitor in world space.
  */
 static void
-solux_canvas_surface_coords(Client *c, double *sx, double *sy)
+solux_canvas_popup_box(Client *c, struct wlr_box *box)
 {
-	struct wlr_box world, visual;
-	double zoom, width_scale, height_scale;
+	struct wlr_box clip;
+	double kx, ky;
+	int lx = 0, ly = 0;
 
-	if (!c || !c->mon || !solux_canvas_active(c->mon) ||
-			!c->canvas_visualized || !sx || !sy)
+	if (!c || !box || !c->mon || !c->scene_surface || c->isfullscreen ||
+		client_is_unmanaged(c) || !solux_canvas_active(c->mon) ||
+		!c->canvas_visualized || !wlr_scene_node_coords(&c->scene_surface->node, &lx, &ly))
 		return;
 
-	world = c->animation.running ? c->animation.current : c->geom;
-	if (world.width <= 0 || world.height <= 0)
-		world = c->geom;
+	kx = c->canvas_scale_x > 0.001 ? c->canvas_scale_x : 1.0;
+	ky = c->canvas_scale_y > 0.001 ? c->canvas_scale_y : 1.0;
+	client_get_clip(c, &clip);
 
-	zoom = c->mon->canvas_zoom > 0.01 ? c->mon->canvas_zoom : 1.0;
-	visual = solux_canvas_world_to_screen(c->mon, world);
+	/* (lx, ly) is where the clip origin is drawn. */
+	box->x = (int)floor((double)clip.x + (c->mon->w.x - lx) / kx);
+	box->y = (int)floor((double)clip.y + (c->mon->w.y - ly) / ky);
+	box->width = MAX(1, (int)lround(c->mon->w.width / kx));
+	box->height = MAX(1, (int)lround(c->mon->w.height / ky));
+}
 
-	width_scale = (double)MAX(1, visual.width -
-			2 * (int)lround((double)c->bw * zoom)) /
-		(double)MAX(1, world.width - 2 * c->bw);
-	height_scale = (double)MAX(1, visual.height -
-			2 * (int)lround((double)c->bw * zoom)) /
-		(double)MAX(1, world.height - 2 * c->bw);
+static bool
+solux_canvas_surface_local(Client *c, struct wlr_surface *surface,
+	double px, double py, double *sx, double *sy)
+{
+	struct wlr_box clip;
+	double kx, ky;
+	int ox = 0, oy = 0, lx = 0, ly = 0;
 
-	if (width_scale > 0.001)
-		*sx /= width_scale;
-	if (height_scale > 0.001)
-		*sy /= height_scale;
+	if (!c || !surface || !sx || !sy || !c->mon || !c->scene_surface ||
+		!solux_canvas_active(c->mon) || !c->canvas_visualized ||
+		client_is_unmanaged(c) || !client_surface(c))
+		return false;
+
+	/* Popups are scaled with the window; they have their own mapping. */
+	if (wlr_xdg_popup_try_from_wlr_surface(wlr_surface_get_root_surface(surface)) != NULL)
+		return solux_canvas_popup_local(c, surface, px, py, sx, sy);
+	if (wlr_surface_get_root_surface(surface) != client_surface(c) ||
+		!nfloat_surface_root_offset(surface, client_surface(c), &ox, &oy) ||
+		!wlr_scene_node_coords(&c->scene_surface->node, &lx, &ly))
+		return false;
+
+	kx = c->canvas_scale_x > 0.001 ? c->canvas_scale_x : 1.0;
+	ky = c->canvas_scale_y > 0.001 ? c->canvas_scale_y : 1.0;
+	client_get_clip(c, &clip);
+
+	/* (lx, ly) is where the clip origin is drawn. */
+	*sx = clip.x + (px - lx) / kx - ox;
+	*sy = clip.y + (py - ly) / ky - oy;
+	return true;
+}
+
+static void
+solux_canvas_surface_coords(Client *c, struct wlr_surface *surface,
+	double *sx, double *sy)
+{
+	double lx, ly;
+
+	if (!cursor || !sx || !sy)
+		return;
+	if (solux_canvas_surface_local(c, surface, cursor->x, cursor->y, &lx, &ly)) {
+		*sx = lx;
+		*sy = ly;
+	}
 }
 
 /*
@@ -506,8 +818,16 @@ solux_canvas_refresh_pointer(void)
 		return;
 
 	xytonode(cursor->x, cursor->y, &surface, &c, &l, &sx, &sy);
-	if (c && surface == client_surface(c) && solux_canvas_active(c->mon))
-		solux_canvas_surface_coords(c, &sx, &sy);
+	if (c && surface && solux_canvas_active(c->mon))
+		solux_canvas_surface_coords(c, surface, &sx, &sy);
+	/* This runs every frame.  When the pointer is already where the client
+	 * last saw it there is nothing to tell it; repeating the same motion each
+	 * frame only wakes the client up for nothing (and keeps the compositor
+	 * rendering while a screen recorder is running). */
+	if (surface && surface == seat->pointer_state.focused_surface &&
+			fabs(sx - seat->pointer_state.sx) < 1e-6 &&
+			fabs(sy - seat->pointer_state.sy) < 1e-6)
+		return;
 	pointerfocus(c, surface, sx, sy, 0);
 }
 
@@ -522,7 +842,7 @@ zoomcanvas(const Arg *arg)
 			!solux_canvas_active(m))
 		return;
 	oldzoom = m->canvas_target_zoom > 0.01 ? m->canvas_target_zoom : 1.0;
-	newzoom = MAX(0.25, MIN(4.0, oldzoom * (dir < 0 ? 0.9 : 1.1)));
+	newzoom = MAX(0.3, MIN(4.0, oldzoom * (dir < 0 ? 0.9 : 1.1)));
 	/* Keep the world point under the pointer fixed while zooming. */
 	cx = m->m.x + m->m.width / 2.0;
 	cy = m->m.y + m->m.height / 2.0;
@@ -542,7 +862,7 @@ movecanvas(const Arg *arg)
 	if (!m || !m->lt[m->sellt] || m->lt[m->sellt]->arrange ||
 			!solux_canvas_active(m))
 		return;
-	step = 200.0 / MAX(0.25, m->canvas_zoom);
+	step = 200.0 / MAX(0.3, m->canvas_zoom);
 	switch (dir) {
 	case 0: m->canvas_target_x = m->canvas_x - step; break;
 	case 1: m->canvas_target_x = m->canvas_x + step; break;
@@ -566,6 +886,7 @@ canvasdrag(const Arg *arg)
 		m->canvas_x = m->canvas_target_x = m->m.x + m->m.width / 2.0;
 		m->canvas_y = m->canvas_target_y = m->m.y + m->m.height / 2.0;
 	}
+	solux_inertia_reset();
 	canvas_drag_mon = m;
 	canvas_drag_cursor_x = cursor->x;
 	canvas_drag_cursor_y = cursor->y;
@@ -588,6 +909,8 @@ solux_canvas_focus_client(Client *c)
 	if (solux_pertag_restoring)
 		return;
 	if (solux_focus_restoring)
+		return;
+	if (cursor_mode == CurCanvasMove)
 		return;
 
 	/* Follow focus in Float canvas mode: keep the focused window centred in

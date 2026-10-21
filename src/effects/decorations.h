@@ -234,28 +234,80 @@ in_shadow_ignore_list(const char *str)
 	return 0;
 }
 
+/* Lays out the shadow node for a window whose outer box is width x height on
+ * screen.  zoom is the canvas zoom (1.0 outside the canvas): sigma, offset and
+ * radius scale with it so the shadow always keeps its proportions to the
+ * window.  The base sigma is kept in the client, never read back from the
+ * node, so repeated calls cannot compound the zoom. */
 void
-client_set_shadow_blur_sigma(Client *c, float blur_sigma)
+client_apply_shadow_geometry(Client *c, int width, int height, double zoom)
 {
 	int sigma, radius;
 
 	if (!c || !c->shadow)
 		return;
-	sigma = MAX(0, (int)lroundf(blur_sigma));
-	radius = c->corner_radius + (int)c->bw;
+	if (!c->shadow_base_set) {
+		/* First use: the node still holds the sigma it was created with. */
+		c->shadow_base_sigma = c->shadow->blur_sigma;
+		c->shadow_base_set = true;
+	}
+	zoom = zoom > 0.01 ? zoom : 1.0;
+	sigma = MAX(0, (int)lround((double)c->shadow_base_sigma * zoom));
+	radius = (int)lround((double)(c->corner_radius + (int)c->bw) * zoom);
 	if ((scenefx_corner_radius_only_floating && !c->isfloating) || c->isfullscreen)
 		radius = 0;
 	radius = MAX(0, radius);
 	wlr_scene_shadow_set_blur_sigma(c->shadow, sigma);
 	wlr_scene_node_set_position(&c->shadow->node, -sigma, -sigma);
 	wlr_scene_shadow_set_size(c->shadow,
-			MAX(0, c->geom.width + sigma * 2),
-			MAX(0, c->geom.height + sigma * 2));
+			MAX(0, width + sigma * 2),
+			MAX(0, height + sigma * 2));
 	wlr_scene_shadow_set_corner_radius(c->shadow, radius);
 	wlr_scene_shadow_set_clipped_region(c->shadow, (struct clipped_region) {
 		.corners = corner_radii_all(radius),
-		.area = { sigma, sigma, MAX(0, c->geom.width), MAX(0, c->geom.height) }
+		.area = { sigma, sigma, MAX(0, width), MAX(0, height) }
 	});
+}
+
+/* Re-lays out the shadow from the client's current state.  Inside the Float
+ * canvas the window is drawn at its zoomed screen size, so the shadow follows
+ * that size and zoom; everywhere else this is the plain geom-based layout. */
+void
+client_refresh_shadow(Client *c)
+{
+	struct wlr_box box, world;
+	double zoom = 1.0;
+
+	if (!c || !c->shadow)
+		return;
+	box = c->geom;
+	if (c->mon && c->canvas_visualized && !c->isfullscreen &&
+			solux_canvas_active(c->mon)) {
+		if (c->mon->taganim_active && c->taganim_role == TAGANIM_OUT &&
+				c->taganim_frozen_zoom > 0.0 &&
+				c->taganim_frozen.width > 0 && c->taganim_frozen.height > 0) {
+			/* Tag transition: the window is frozen at its old camera. */
+			box = c->taganim_frozen;
+			zoom = c->taganim_frozen_zoom;
+		} else {
+			world = c->animation.running ? c->animation.current : c->geom;
+			if (world.width <= 0 || world.height <= 0)
+				world = c->geom;
+			box = solux_canvas_world_to_screen(c->mon, world);
+			zoom = c->mon->canvas_zoom > 0.01 ? c->mon->canvas_zoom : 1.0;
+		}
+	}
+	client_apply_shadow_geometry(c, box.width, box.height, zoom);
+}
+
+void
+client_set_shadow_blur_sigma(Client *c, float blur_sigma)
+{
+	if (!c || !c->shadow)
+		return;
+	c->shadow_base_sigma = blur_sigma;
+	c->shadow_base_set = true;
+	client_refresh_shadow(c);
 }
 
 void
@@ -418,6 +470,31 @@ update_client_corner_radius(Client *c)
 	}
 }
 
+static int
+client_shadow_floating(Client *c)
+{
+	const Layout *lt;
+
+	if (!c)
+		return 0;
+	if (c->isfloating)
+		return 1;
+	lt = c->mon ? c->mon->lt[c->mon->sellt] : NULL;
+	return lt && !lt->arrange;
+}
+
+static int
+client_shadow_wanted(Client *c)
+{
+	if (!c)
+		return 0;
+	if (scenefx_shadow_only_floating && !client_shadow_floating(c))
+		return 0;
+	if (in_shadow_ignore_list(client_get_appid(c)) || c->isfullscreen)
+		return 0;
+	return 1;
+}
+
 void
 update_client_shadow_color(Client *c)
 {
@@ -428,8 +505,7 @@ update_client_shadow_color(Client *c)
 		return;
 	color = (c->mon && focustop(c->mon) == c)
 		? scenefx_shadow_color_focus : scenefx_shadow_color;
-	if ((scenefx_shadow_only_floating && !c->isfloating) ||
-			in_shadow_ignore_list(client_get_appid(c)) || c->isfullscreen) {
+	if (!client_shadow_wanted(c)) {
 		color = scenefx_transparent;
 		enabled = 0;
 	}

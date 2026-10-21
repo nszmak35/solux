@@ -119,6 +119,8 @@ shadow all use it. `scenefx_corner_radius_only_floating` limits rounding to floa
 Shadows need `scenefx_shadow = True` and a blur sigma above zero (`scenefx_shadow_blur_sigma` for unfocused and
 `scenefx_shadow_blur_sigma_focus` for the focused window); a sigma of 0 draws no visible shadow.
 `scenefx_shadow_color` and `scenefx_shadow_color_focus` are `0xRRGGBBAA` values.
+`scenefx_shadow_only_floating` limits shadows to floating windows: every window in the Float layout, and
+windows switched to floating mode in the other layouts.
 
 ### Tag (workspace) animation
 
@@ -136,17 +138,41 @@ It follows the global `animations` switch.
 
 ## soluxctl
 
+`soluxctl` talks to a running Solux: control commands go through a Unix socket
+(`$XDG_RUNTIME_DIR/soluxctl-$WAYLAND_DISPLAY.sock`), `watch-*` commands and `set-workspace` use the
+dwl-ipc protocol. Tag and layout names come from the running compositor, so they always match your `config.py`.
+
 ```
 soluxctl help
 soluxctl reconfig
 soluxctl set-workspace <name_tag>
-soluxctl set-layout <layout>
+soluxctl set-layout [layout]
+soluxctl set-kblayout
 soluxctl watch-layout
 soluxctl watch-kblayout
 soluxctl watch-monitor
 soluxctl watch-workspace <name_tag>
 soluxctl watch-focus
 soluxctl watch-all
+```
+
+| Command | What it does |
+| --- | --- |
+| `reconfig` | Reloads the configuration. |
+| `set-workspace <name_tag>` | Switches the active monitor to the tag with this name (a name from `tags` in `config.py`). |
+| `set-layout <layout>` | Switches the window layout of the active monitor by its name: a key of the `layouts` dictionary in `config.py`. Matching ignores case and surrounding brackets, so `monocle` and `'[ monocle ]'` are the same. An unknown name is an error. |
+| `set-layout` | Without an argument, cycles through the `layouts` dictionary of `config.py` in its order, wrapping around at the end. |
+| `set-kblayout` | Switches the keyboard layout to the next one from `keyboard_layout` (for example `us,ru`: us → ru → us), exactly like pressing a layout-switch hotkey. The change is permanent, not until the next key press. With a single layout it does nothing and is not an error. |
+| `watch-*` | Print the compositor state as JSON lines whenever it changes. |
+
+```python
+layouts = {"dwindle": "dwindle", "tile": "tile", "float": "float", "monocle": "monocle"}
+
+keys = [
+    ["MODKEY", "x", "spawn", "soluxctl set-layout monocle"],
+    ["MODKEY", "space", "spawn", "soluxctl set-layout"],
+    ["MODKEY", "k", "spawn", "soluxctl set-kblayout"],
+]
 ```
 
 ## Licenses

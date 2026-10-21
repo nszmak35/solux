@@ -10,6 +10,108 @@ soluxctl_write_reply(int fd, const char *reply)
 	return n == (ssize_t)len ? 0 : -1;
 }
 
+static void
+soluxctl_norm_name(const char *in, char *out, size_t outsz)
+{
+	const char *p = in ? in : "";
+	const char *q;
+	size_t len;
+
+	if (!outsz)
+		return;
+	while (isspace((unsigned char)*p))
+		p++;
+	q = p + strlen(p);
+	while (q > p && isspace((unsigned char)q[-1]))
+		q--;
+	if (q - p >= 2 && *p == '[' && q[-1] == ']') {
+		p++;
+		q--;
+		while (p < q && isspace((unsigned char)*p))
+			p++;
+		while (q > p && isspace((unsigned char)q[-1]))
+			q--;
+	}
+	len = (size_t)(q - p);
+	if (len >= outsz)
+		len = outsz - 1;
+	memcpy(out, p, len);
+	out[len] = '\0';
+}
+
+static int
+soluxctl_layout_find(const char *name)
+{
+	char want[128], have[128];
+	size_t i;
+
+	soluxctl_norm_name(name, want, sizeof(want));
+	if (!*want)
+		return -1;
+	for (i = 0; i < layouts_len; i++) {
+		if (!layouts[i].symbol)
+			continue;
+		soluxctl_norm_name(layouts[i].symbol, have, sizeof(have));
+		if (!strcasecmp(have, want))
+			return (int)i;
+	}
+	return -1;
+}
+
+static void
+soluxctl_cmd_set_layout(int cfd, const char *arg)
+{
+	char msg[256];
+	char shown[128];
+	int idx;
+
+	while (isspace((unsigned char)*arg))
+		arg++;
+	if (!selmon || !selmon->pertag) {
+		soluxctl_write_reply(cfd, "ERR no active monitor\n");
+		return;
+	}
+	if (!layouts_len) {
+		soluxctl_write_reply(cfd, "ERR no layouts configured\n");
+		return;
+	}
+	if (!*arg) {
+		Arg next = {.i = 1};
+		cyclelayout(&next);
+		soluxctl_write_reply(cfd, "OK\n");
+		return;
+	}
+	idx = soluxctl_layout_find(arg);
+	if (idx < 0) {
+		soluxctl_norm_name(arg, shown, sizeof(shown));
+		snprintf(msg, sizeof(msg), "ERR layout '%s' does not exist\n", shown);
+		soluxctl_write_reply(cfd, msg);
+		return;
+	}
+	solux_setlayout_on(selmon, &layouts[idx]);
+	soluxctl_write_reply(cfd, "OK\n");
+}
+
+static void
+soluxctl_cmd_list(int cfd, int tags_list)
+{
+	char out[4096];
+	size_t len = 0, i, count;
+	int n;
+
+	n = snprintf(out, sizeof(out), "OK\n");
+	len = (n > 0) ? (size_t)n : 0;
+	count = tags_list ? tagcount : layouts_len;
+	for (i = 0; i < count; i++) {
+		const char *name = tags_list ? tags[i] : layouts[i].symbol;
+		n = snprintf(out + len, sizeof(out) - len, "%s\n", name ? name : "");
+		if (n < 0 || (size_t)n >= sizeof(out) - len)
+			break;
+		len += (size_t)n;
+	}
+	soluxctl_write_reply(cfd, out);
+}
+
 static int
 soluxctl_handle_fd(int fd, uint32_t mask, void *data)
 {
@@ -45,10 +147,18 @@ soluxctl_handle_fd(int fd, uint32_t mask, void *data)
 		Arg arg = {0};
 		reload_config(&arg);
 		soluxctl_write_reply(cfd, "OK\n");
-	} else if (!strcasecmp(buf, "KBLAYOUT NEXT")) {
-		Arg arg = {.i = 1};
-		incxkbrules(&arg);
-		soluxctl_write_reply(cfd, "OK\n");
+	} else if (!strcasecmp(buf, "KBLAYOUT NEXT") || !strcasecmp(buf, "SET-KBLAYOUT")) {
+		if (solux_kblayout_step(1) < 0)
+			soluxctl_write_reply(cfd, "ERR keyboard is not ready\n");
+		else
+			soluxctl_write_reply(cfd, "OK\n");
+	} else if (!strncasecmp(buf, "SET-LAYOUT", 10) &&
+			(buf[10] == '\0' || isspace((unsigned char)buf[10]))) {
+		soluxctl_cmd_set_layout(cfd, buf + 10);
+	} else if (!strcasecmp(buf, "LAYOUTS")) {
+		soluxctl_cmd_list(cfd, 0);
+	} else if (!strcasecmp(buf, "TAGS")) {
+		soluxctl_cmd_list(cfd, 1);
 	} else if (!strcasecmp(buf, "PING")) {
 		soluxctl_write_reply(cfd, "OK\n");
 	} else {

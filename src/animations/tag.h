@@ -98,7 +98,7 @@ solux_taganim_apply_frozen(Client *c)
 			.corners = corner_radii_all(radius), .area = {0, 0, v.width, v.height}});
 	}
 	if (c->shadow)
-		client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+		client_apply_shadow_geometry(c, v.width, v.height, z);
 }
 
 /* Corner radii of the visible part: corners next to the cut become square. */
@@ -162,7 +162,7 @@ solux_taganim_sync_plain(Client *c, struct wlr_box visual)
 		solux_animation_apply_rect_borders(c, visual);
 	update_client_rounded_borders(c);
 	if (c->shadow)
-		client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+		client_apply_shadow_geometry(c, visual.width, visual.height, 1.0);
 	c->geom = real;
 }
 
@@ -192,10 +192,8 @@ solux_taganim_crop_shadow(Client *c, const struct wlr_box *win, const struct wlr
 	if (!c->shadow)
 		return;
 	sigma = MAX(0, (int)lroundf(c->shadow->blur_sigma));
-	radius = c->corner_radius + (int)c->bw;
-	if ((scenefx_corner_radius_only_floating && !c->isfloating) || c->isfullscreen)
-		radius = 0;
-	radius = MAX(0, radius);
+	/* The shadow node already carries the (zoom-scaled) radius. */
+	radius = MAX(0, c->shadow->corner_radius);
 	sb = (struct wlr_box){ win->x - sigma, win->y - sigma,
 		win->width + 2 * sigma, win->height + 2 * sigma };
 	if (sb.width <= 0 || sb.height <= 0 || !wlr_box_intersection(&v, &sb, lc)) {
@@ -267,8 +265,8 @@ solux_taganim_crop_decor(Client *c, const struct wlr_box *clip, const struct wlr
 	if (c->canvas_visualized) {
 		solux_canvas_update_decorations(c, *vis, z);
 		if (c->shadow)
-			client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
-		shwin = (struct wlr_box){ 0, 0, c->geom.width, c->geom.height };
+			client_apply_shadow_geometry(c, vis->width, vis->height, z);
+		shwin = win;
 	} else {
 		solux_taganim_sync_plain(c, win);
 		shwin = win;

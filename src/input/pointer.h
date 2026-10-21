@@ -62,6 +62,7 @@ buttonpress(struct wl_listener *listener, void *data)
 	case WL_POINTER_BUTTON_STATE_RELEASED:
 		if (cursor_mode == CurCanvasMove) {
 			cursor_mode = CurNormal;
+			solux_inertia_release_canvas(canvas_drag_mon);
 			canvas_drag_mon = NULL;
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			return;
@@ -69,11 +70,24 @@ buttonpress(struct wl_listener *listener, void *data)
 		/* If you released any buttons, we exit interactive move/resize mode. */
 		/* TODO: should reset to the pointer focus's current setcursor */
 		if (!locked && cursor_mode != CurNormal && cursor_mode != CurPressed) {
+			const bool was_move = cursor_mode == CurMove;
+
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			cursor_mode = CurNormal;
 			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
-			setmon(grabc, selmon, 0);
+			if (grabc && selmon && grabc->mon != selmon) {
+				/* Keep the window where it was released and do not let the
+				 * target camera chase it: the drop must not move the view. */
+				solux_canvas_transfer_client(grabc, selmon);
+				solux_focus_restoring = true;
+				setmon(grabc, selmon, 0);
+				solux_focus_restoring = false;
+			} else {
+				setmon(grabc, selmon, 0);
+			}
+			if (was_move)
+				solux_inertia_release_client(grabc);
 			grabc = NULL;
 			return;
 		}
@@ -380,16 +394,21 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 
 	/* Find the client under the pointer and send the event along. */
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, &sx, &sy);
-	if (c && surface == client_surface(c) && solux_canvas_active(c->mon))
-		solux_canvas_surface_coords(c, &sx, &sy);
+	if (c && surface && solux_canvas_active(c->mon))
+		solux_canvas_surface_coords(c, surface, &sx, &sy);
 
 	if (cursor_mode == CurPressed && !seat->drag
 			&& surface != seat->pointer_state.focused_surface
 			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
 		c = w;
 		surface = seat->pointer_state.focused_surface;
-		sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
-		sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		/* A button is held and the pointer left the surface: keep sending
+		 * coordinates relative to that surface.  On the zoomed canvas the
+		 * window's geom is world space, so map through the camera instead. */
+		if (l || !solux_canvas_surface_local(w, surface, cursor->x, cursor->y, &sx, &sy)) {
+			sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
+			sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		}
 	}
 
 	/* time is 0 in internal calls meant to restore pointer focus. */
@@ -432,12 +451,13 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	/* If we are panning the canvas, update camera coordinates directly so
 	 * the canvas tracks the pointer without accumulating frame lag. */
 	if (cursor_mode == CurCanvasMove && canvas_drag_mon && solux_canvas_active(canvas_drag_mon)) {
-		double z = MAX(0.25, canvas_drag_mon->canvas_zoom);
+		double z = MAX(0.3, canvas_drag_mon->canvas_zoom);
 		canvas_drag_mon->canvas_x = canvas_drag_mon->canvas_target_x =
 			canvas_drag_start_x - (cursor->x - canvas_drag_cursor_x) / z;
 		canvas_drag_mon->canvas_y = canvas_drag_mon->canvas_target_y =
 			canvas_drag_start_y - (cursor->y - canvas_drag_cursor_y) / z;
 		canvas_drag_mon->canvas_animating = false;
+		solux_inertia_sample(cursor->x, cursor->y);
 		solux_canvas_apply(canvas_drag_mon);
 		wlr_output_schedule_frame(canvas_drag_mon->wlr_output);
 		return;
@@ -446,6 +466,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	/* If we are currently grabbing the mouse, handle and return */
 	if (cursor_mode == CurMove) {
 		double wx, wy;
+		solux_inertia_sample(cursor->x, cursor->y);
 		solux_canvas_screen_to_world(grabc ? grabc->mon : NULL, cursor->x, cursor->y, &wx, &wy);
 		resize(grabc, (struct wlr_box){.x = (int)lround(wx) - grabcx, .y = (int)lround(wy) - grabcy,
 			.width = grabc->geom.width, .height = grabc->geom.height}, 1);
@@ -500,6 +521,8 @@ moveresize(const Arg *arg)
 	switch (cursor_mode = arg->ui) {
 	case CurMove: {
 		double wx, wy;
+		solux_inertia_reset();
+		grabc->inertia = false;
 		solux_canvas_screen_to_world(grabc->mon, cursor->x, cursor->y, &wx, &wy);
 		grabcx = (int)lround(wx) - grabc->geom.x;
 		grabcy = (int)lround(wy) - grabc->geom.y;
@@ -526,10 +549,22 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 		uint32_t time)
 {
 	struct timespec now;
+	bool real_motion = time != 0;
 
-	if (surface != seat->pointer_state.focused_surface &&
-			sloppyfocus && time && c && !client_is_unmanaged(c))
+	/* Focus follows the mouse when real pointer motion enters a different
+	 * surface -- or a different client than the last one entered by motion.
+	 * The second test matters because the canvas re-targets pointer focus
+	 * every frame (camera/zoom/animations move windows under a resting
+	 * pointer) without moving keyboard focus; comparing only the surface
+	 * made the next real motion over that window a no-op, so it never got
+	 * focus. */
+	if (sloppyfocus && real_motion && c && !client_is_unmanaged(c) &&
+			(surface != seat->pointer_state.focused_surface ||
+			 c != pointer_hover_client)) {
 		focusclient(c, 0);
+	}
+	if (real_motion)
+		pointer_hover_client = c;
 
 	/* If surface is NULL, clear pointer focus */
 	if (!surface) {
@@ -643,6 +678,26 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 			l = pnode->data;
 		}
 		if (c && c->taganim_role == TAGANIM_OUT) {
+			c = NULL;
+			surface = NULL;
+		}
+	}
+
+	/* On the zoomed canvas a window is drawn smaller or bigger than its world
+	 * geometry.  Whatever hangs on it -- borders, shadow, blur -- belongs to the
+	 * window only where the window is drawn: hovering next to it must neither
+	 * focus it (sloppyfocus) nor count as a hit.  Popups are not affected. */
+	if (c && c->mon && c->canvas_visualized && !c->isfullscreen &&
+			solux_canvas_active(c->mon) &&
+			(!surface || wlr_surface_get_root_surface(surface) == client_surface(c))) {
+		struct wlr_box vis = solux_canvas_world_to_screen(c->mon,
+			c->animation.running && c->animation.current.width > 0 &&
+			c->animation.current.height > 0 ? c->animation.current : c->geom);
+		const int margin = MAX(2, (int)lround((double)MAX(c->bw, c->bwe) *
+			(c->mon->canvas_zoom > 0.01 ? c->mon->canvas_zoom : 1.0)) + 1);
+
+		if (x < vis.x - margin || x >= vis.x + vis.width + margin ||
+				y < vis.y - margin || y >= vis.y + vis.height + margin) {
 			c = NULL;
 			surface = NULL;
 		}

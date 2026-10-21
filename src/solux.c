@@ -97,6 +97,10 @@ enum { BorderNormal, BorderFocus, BorderUrgent };
 
 #include "dwl-ipc-unstable-v2-protocol.h"
 #include "util.h"
+#include <stddef.h>
+void die(const char *fmt, ...);
+void *ecalloc(size_t nmemb, size_t size);
+int fd_set_nonblock(int fd);
 extern const struct wl_interface ext_workspace_manager_v1_interface;
 extern const struct wl_interface ext_workspace_group_handle_v1_interface;
 extern const struct wl_interface ext_workspace_handle_v1_interface;
@@ -233,6 +237,11 @@ struct SoluxFadeClient {
 	int type;
 	int action;
 	float start_opacity;
+	/* Shadow node of the close snapshot (child of scene, NULL if none) and the
+	 * layout it had at the start, so it can follow the window's animation. */
+	struct wlr_scene_shadow *shadow;
+	int shadow_sigma, shadow_w, shadow_h, shadow_radius;
+	float shadow_color[4];
 };
 
 
@@ -323,6 +332,10 @@ typedef struct Client {
 	float opacity_unfocus;
 	int corner_radius;
 	struct wlr_scene_shadow *shadow;
+	/* Shadow blur sigma as configured (zoom 1).  The scene node holds the
+	 * zoom-scaled value, so it must never be read back as the base. */
+	float shadow_base_sigma;
+	bool shadow_base_set;
 	struct wlr_scene_blur *blur;
 	int has_shadow_enabled;
 	struct wlr_scene_rect *round_border;
@@ -337,6 +350,18 @@ typedef struct Client {
 	int isnoanimation;
 	int isminimized;
 	bool canvas_visualized;
+	/* Buffer scale last requested from the client by the canvas zoom
+	 * (0 = never changed by the canvas). */
+	float canvas_buf_scale;
+	/* Glide after a flick (see animations/inertia.h). */
+	bool inertia;
+	double ivx, ivy;   /* velocity, screen px/s */
+	double irx, iry;   /* sub-pixel remainder, world units */
+	uint64_t inertia_ms;
+	/* Screen px per surface px applied to the client's buffers by the canvas
+	 * (0 = not applied yet); used to map pointer coordinates back. */
+	double canvas_scale_x;
+	double canvas_scale_y;
 	/* Canvas center captured before the initial map/setmon focus.  The first
 	 * setmon() can move the camera immediately when animations are disabled;
 	 * Float spawn must use the canvas position that was visible before that. */
@@ -472,6 +497,10 @@ struct Monitor {
 	uint64_t canvas_time_started;
 	uint32_t canvas_duration;
 	bool canvas_animating;
+	/* Zoom-dependent client buffer scale (sharp rendering while zoomed in). */
+	double canvas_scale_mult;
+	double canvas_scale_seen_zoom;
+	uint64_t canvas_scale_settle_ms;
 	bool taganim_active;
 	bool taganim_vertical;
 	uint64_t taganim_started;
@@ -639,6 +668,7 @@ static void setfloating(Client *c, int floating);
 static void solux_apply_tag_layout(Client *c, Monitor *m, uint32_t tags);
 static void setfullscreen(Client *c, int fullscreen);
 static void setlayout(const Arg *arg);
+static void solux_setlayout_on(Monitor *m, const Layout *lt);
 static void setmfact(const Arg *arg);
 static void setmon(Client *c, Monitor *m, uint32_t newtags);
 static void setopacityunfocus(const Arg *arg);
@@ -679,6 +709,7 @@ static void canvasdrag(const Arg *arg);
 static void solux_canvas_apply(Monitor *m);
 static void solux_canvas_apply_client(Client *c);
 static void solux_canvas_frame(Monitor *m);
+static void solux_inertia_reset(void);
 static void solux_canvas_focus_client(Client *c);
 static bool solux_canvas_active(Monitor *m);
 static struct wlr_box solux_canvas_world_to_screen(Monitor *m, struct wlr_box world);
@@ -707,6 +738,8 @@ static void iter_xdg_scene_buffers_opacity(struct wlr_scene_buffer *buffer, int 
 static void iter_xdg_scene_buffers_corner_radius(struct wlr_scene_buffer *buffer, int sx, int sy, void *user_data);
 static int in_shadow_ignore_list(const char *str);
 static void client_set_shadow_blur_sigma(Client *c, float blur_sigma);
+static void client_refresh_shadow(Client *c);
+static void client_apply_shadow_geometry(Client *c, int width, int height, double zoom);
 static void update_client_corner_radius(Client *c);
 static void update_client_rounded_borders(Client *c);
 static void update_client_shadow_color(Client *c);
@@ -745,6 +778,8 @@ static int locked;
 static void *exclusive_focus;
 static bool solux_pertag_restoring;
 static bool solux_focus_restoring;
+/* Client last entered by real pointer motion (focus-follows-mouse bookkeeping). */
+static Client *pointer_hover_client;
 static struct wl_display *dpy;
 static struct wl_event_loop *event_loop;
 
@@ -1120,6 +1155,7 @@ static bool is_scroller_layout(Monitor *m) { (void)m; return false; }
 #include "animations/tag.h"
 #include "effects/decorations.h"
 #include "canvas/canvas.h"
+#include "animations/inertia.h"
 #include "layouts/layouts.h"
 #include "config/config_util.h"
 #include "config/config_scalar.h"
@@ -1251,6 +1287,14 @@ arrange(Monitor *m)
 						: (m->lt[m->sellt]->arrange && c->isfloating)
 								? layers[LyrFloat]
 								: c->scene->node.parent);
+	}
+
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m || !c->shadow || !c->scene || !client_surface(c) || !client_surface(c)->mapped ||
+				client_is_unmanaged(c) || !VISIBLEON(c, m) || c->taganim_role == TAGANIM_OUT)
+			continue;
+		if (client_shadow_wanted(c) != c->has_shadow_enabled)
+			update_client_shadow_color(c);
 	}
 
 	if (m->lt[m->sellt]->arrange)
@@ -1579,6 +1623,13 @@ commitpopup(struct wl_listener *listener, void *data)
 	box = type == LayerShell ? l->mon->m : c->mon->w;
 	box.x -= (type == LayerShell ? l->scene->node.x : c->geom.x);
 	box.y -= (type == LayerShell ? l->scene->node.y : c->geom.y);
+	if (type != LayerShell) {
+		/* On the zoomed canvas the popup is shown scaled, through the camera. */
+		solux_canvas_popup_box(c, &box);
+		/* A popup of a window the canvas renders sharper does the same. */
+		if (c->canvas_buf_scale > 0.0f && client_surface(c)->current.viewport.has_dst)
+			client_set_scale(popup->base->surface, c->canvas_buf_scale);
+	}
 	wlr_xdg_popup_unconstrain_from_box(popup, &box);
 	wl_list_remove(&listener->link);
 	free(listener);
@@ -1758,6 +1809,15 @@ destroynotify(struct wl_listener *listener, void *data)
 					m->pertag->focused[i] = NULL;
 		}
 	}
+	/* Never keep a pointer to the client that is about to be freed. */
+	if (c == grabc) {
+		cursor_mode = CurNormal;
+		grabc = NULL;
+	}
+	if (nfloat_spawn_pending == c)
+		nfloat_spawn_pending = NULL;
+	if (pointer_hover_client == c)
+		pointer_hover_client = NULL;
 	free(c);
 }
 
@@ -2539,7 +2599,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 	update_client_rounded_borders(c);
 	if (scenefx_shadow && c->shadow)
-		client_set_shadow_blur_sigma(c, c->shadow->blur_sigma);
+		client_refresh_shadow(c);
 
 	if (scenefx_blur && c->blur) {
 		int radius = c->corner_radius;
@@ -2830,39 +2890,39 @@ solux_animation_relayout(Monitor *m)
 	}
 }
 
-void
-setlayout(const Arg *arg)
+static void
+solux_setlayout_on(Monitor *m, const Layout *lt)
 {
 	const Layout *oldlt;
 	Client *c;
 
-	if (!selmon)
+	if (!m || !m->pertag)
 		return;
 
-	oldlt = selmon->lt[selmon->sellt];
-	if (!arg || !arg->v || arg->v != oldlt)
-		selmon->sellt = selmon->pertag->sellts[selmon->pertag->curtag] ^= 1;
-	if (arg && arg->v)
-		selmon->lt[selmon->sellt] = selmon->pertag->ltidxs[selmon->pertag->curtag][selmon->sellt] = (Layout *)arg->v;
+	oldlt = m->lt[m->sellt];
+	if (!lt || lt != oldlt)
+		m->sellt = m->pertag->sellts[m->pertag->curtag] ^= 1;
+	if (lt)
+		m->lt[m->sellt] = m->pertag->ltidxs[m->pertag->curtag][m->sellt] = (Layout *)lt;
 
 	
 
-	if (!oldlt->arrange && selmon->lt[selmon->sellt]->arrange) {
+	if (!oldlt->arrange && m->lt[m->sellt]->arrange) {
 		/* Leaving Float: capture the complete pre-layout state first.  Do not
 		 * call setfloating() here: it arranges immediately for every client, so
 		 * with several Float windows later clients could be converted against an
 		 * already partially-arranged monocle tree.  Convert the whole set first,
 		 * then run exactly one layout pass. */
 		wl_list_for_each(c, &clients, link) {
-			if (c->mon != selmon || !VISIBLEON(c, selmon) || c->isfullscreen ||
+			if (c->mon != m || !VISIBLEON(c, m) || c->isfullscreen ||
 					client_is_unmanaged(c))
 				continue;
 			c->canvas_saved_geom = c->geom;
 			c->canvas_saved_floating = c->isfloating;
 			c->has_canvas_saved_geom = true;
-			if (selmon->pertag->curtag <= TAGCOUNT) {
-				c->canvas_tag_geom[selmon->pertag->curtag] = c->geom;
-				c->canvas_tag_geom_valid |= (uint32_t)1u << selmon->pertag->curtag;
+			if (m->pertag->curtag <= TAGCOUNT) {
+				c->canvas_tag_geom[m->pertag->curtag] = c->geom;
+				c->canvas_tag_geom_valid |= (uint32_t)1u << m->pertag->curtag;
 			}
 
 			if (c->canvas_visualized)
@@ -2880,38 +2940,46 @@ setlayout(const Arg *arg)
 			if (animations && !c->isnoanimation)
 				c->animation.current = c->geom;
 		}
-	} else if (oldlt->arrange && !selmon->lt[selmon->sellt]->arrange) {
+	} else if (oldlt->arrange && !m->lt[m->sellt]->arrange) {
 		/* Returning to Float: restore the exact geometry each client had on
 		 * the canvas, animating from its current tiled geometry when enabled. */
 		wl_list_for_each(c, &clients, link) {
-			if (c->mon != selmon || !VISIBLEON(c, selmon) || c->isfullscreen ||
+			if (c->mon != m || !VISIBLEON(c, m) || c->isfullscreen ||
 					client_is_unmanaged(c) || !c->has_canvas_saved_geom)
 				continue;
 			c->isfloating = c->canvas_saved_floating;
 			if (animations && !c->isnoanimation && !c->animation.running)
 				c->animation.current = c->geom;
 			resize(c, c->canvas_saved_geom, 0);
-			if (selmon->pertag->curtag <= TAGCOUNT) {
-				c->canvas_tag_geom[selmon->pertag->curtag] = c->canvas_saved_geom;
-				c->canvas_tag_geom_valid |= (uint32_t)1u << selmon->pertag->curtag;
+			if (m->pertag->curtag <= TAGCOUNT) {
+				c->canvas_tag_geom[m->pertag->curtag] = c->canvas_saved_geom;
+				c->canvas_tag_geom_valid |= (uint32_t)1u << m->pertag->curtag;
 			}
 			c->has_canvas_saved_geom = false;
 		}
 	}
 
-	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, sizeof(selmon->ltsymbol));
-	solux_animation_relayout(selmon);
+	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, sizeof(m->ltsymbol));
+	solux_animation_relayout(m);
 
 	/* Returning to Float is a layout transition, not a focus transition, so
 	 * focusclient() is not necessarily called here.  Explicitly retarget the
 	 * canvas to the window that is already focused after its Float geometry has
 	 * been restored.  This preserves the existing animation/no-animation path. */
-	if (!selmon->lt[selmon->sellt]->arrange)
-		solux_canvas_focus_client(focustop(selmon));
+	if (!m->lt[m->sellt]->arrange)
+		solux_canvas_focus_client(focustop(m));
 
 	printstatus();
-	dwl_ipc_output_printstatus(selmon);
-	ext_workspace_printstatus(selmon);
+	dwl_ipc_output_printstatus(m);
+	ext_workspace_printstatus(m);
+}
+
+void
+setlayout(const Arg *arg)
+{
+	if (!selmon)
+		return;
+	solux_setlayout_on(selmon, arg ? (const Layout *)arg->v : NULL);
 }
 
 /* arg > 1.0 will set mfact absolutely */
