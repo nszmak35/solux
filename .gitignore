@@ -1,6 +1,6 @@
 build/
-/solux
-/soluxctl
+solux
+soluxctl
 __pycache__/
 *.o
 *.bak

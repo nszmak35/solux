@@ -708,6 +708,10 @@ static void movecanvas(const Arg *arg);
 static void canvasdrag(const Arg *arg);
 static void solux_canvas_apply(Monitor *m);
 static void solux_canvas_apply_client(Client *c);
+static void solux_canvas_x11_position(Client *c, int w, int h, int *x, int *y);
+static void solux_canvas_x11_sync(Client *c);
+static void solux_canvas_x11_raise(Client *c);
+static void solux_canvas_x11_rebase_child(Client *c, Client *parent);
 static void solux_canvas_frame(Monitor *m);
 static void solux_inertia_reset(void);
 static void solux_canvas_focus_client(Client *c);
@@ -2362,6 +2366,8 @@ mapnotify(struct wl_listener *listener, void *data)
 		goto unset_fullscreen;
 	}
 
+	solux_canvas_x11_rebase_child(c, client_get_parent(c));
+
 	for (i = 0; i < 4; i++) {
 		c->border[i] = wlr_scene_rect_create(c->scene, 0, 0, bordercolor);
 		c->border[i]->node.data = c;
@@ -2592,7 +2598,11 @@ resize(Client *c, struct wlr_box geo, int interact)
 			c->geom.height - 2 * c->bw);
 	#ifdef XWAYLAND
 		if (c->type == X11) {
-			wlr_xwayland_surface_configure(c->surface.xwayland, c->geom.x, c->geom.y, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
+			int x11x, x11y;
+
+			solux_canvas_x11_position(c, c->geom.width - 2 * c->bw,
+					c->geom.height - 2 * c->bw, &x11x, &x11y);
+			wlr_xwayland_surface_configure(c->surface.xwayland, x11x, x11y, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
 		}
 	#endif
 		client_get_clip(c, &clip);

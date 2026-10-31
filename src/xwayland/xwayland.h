@@ -52,9 +52,16 @@ configurex11(struct wl_listener *listener, void *data)
 		return;
 	}
 	if ((c->isfloating && c != grabc) || !c->mon->lt[c->mon->sellt]->arrange) {
-		resize(c, (struct wlr_box){.x = event->x - c->bw,
+		struct wlr_box want = {.x = event->x - c->bw,
 				.y = event->y - c->bw, .width = event->width + c->bw * 2,
-				.height = event->height + c->bw * 2}, 0);
+				.height = event->height + c->bw * 2};
+
+		/* Canvas: keep the world position, take only the size. */
+		if (solux_canvas_active(c->mon) && !c->isfullscreen) {
+			want.x = c->geom.x;
+			want.y = c->geom.y;
+		}
+		resize(c, want, 0);
 	} else {
 		arrange(c->mon);
 	}

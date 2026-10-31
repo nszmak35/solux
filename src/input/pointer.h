@@ -566,6 +566,9 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	if (real_motion)
 		pointer_hover_client = c;
 
+	if (surface && c && surface != seat->pointer_state.focused_surface)
+		solux_canvas_x11_raise(c);
+
 	/* If surface is NULL, clear pointer focus */
 	if (!surface) {
 		wlr_seat_pointer_notify_clear_focus(seat);

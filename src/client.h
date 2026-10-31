@@ -330,8 +330,11 @@ client_set_size(Client *c, uint32_t width, uint32_t height)
 		return 0;
 #ifdef XWAYLAND
 	if (client_is_x11(c)) {
+		int x11x = c->geom.x, x11y = c->geom.y;
+
+		solux_canvas_x11_position(c, (int)width, (int)height, &x11x, &x11y);
 		wlr_xwayland_surface_configure(c->surface.xwayland,
-				c->geom.x, c->geom.y, width, height);
+				x11x, x11y, width, height);
 		return 0;
 	}
 #endif

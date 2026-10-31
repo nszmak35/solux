@@ -197,6 +197,102 @@ solux_canvas_screen_to_world(Monitor *m, double sx, double sy, double *wx, doubl
 }
 
 
+/* X11 position for a canvas window: where it is drawn, kept inside its monitor. */
+static void
+solux_canvas_x11_position(Client *c, int w, int h, int *x, int *y)
+{
+	struct wlr_box world, visual;
+	double zoom;
+	int minx, miny, maxx, maxy;
+
+	if (!c || !x || !y)
+		return;
+	*x = c->geom.x;
+	*y = c->geom.y;
+	if (!c->mon || !client_surface(c) || client_is_unmanaged(c) ||
+		c->isfullscreen || !solux_canvas_active(c->mon) ||
+		c->mon->m.width <= 0 || c->mon->m.height <= 0)
+		return;
+
+	world = c->animation.running ? c->animation.current : c->geom;
+	if (world.width <= 0 || world.height <= 0)
+		world = c->geom;
+	visual = solux_canvas_world_to_screen(c->mon, world);
+	zoom = c->mon->canvas_zoom > 0.01 ? c->mon->canvas_zoom : 1.0;
+
+	*x = visual.x + (int)lround((double)c->bw * zoom);
+	*y = visual.y + (int)lround((double)c->bw * zoom);
+
+	w = MAX(1, w);
+	h = MAX(1, h);
+	minx = c->mon->m.x;
+	miny = c->mon->m.y;
+	maxx = MAX(minx, c->mon->m.x + c->mon->m.width - w);
+	maxy = MAX(miny, c->mon->m.y + c->mon->m.height - h);
+	*x = MAX(minx, MIN(*x, maxx));
+	*y = MAX(miny, MIN(*y, maxy));
+}
+
+static void
+solux_canvas_x11_sync(Client *c)
+{
+#ifdef XWAYLAND
+	struct wlr_xwayland_surface *xs;
+	int x, y, w, h;
+
+	if (!c || !client_is_x11(c) || !c->mon || client_is_unmanaged(c) ||
+		c->isfullscreen || !client_surface(c) || !client_surface(c)->mapped ||
+		!solux_canvas_active(c->mon) || !(xs = c->surface.xwayland))
+		return;
+
+	w = xs->width;
+	h = xs->height;
+	if (w <= 0 || h <= 0) {
+		w = c->geom.width - 2 * (int)c->bw;
+		h = c->geom.height - 2 * (int)c->bw;
+	}
+	solux_canvas_x11_position(c, w, h, &x, &y);
+	if (x == xs->x && y == xs->y)
+		return;
+	wlr_xwayland_surface_configure(xs, x, y, MAX(1, w), MAX(1, h));
+#else
+	(void)c;
+#endif
+}
+
+/* Raise the X11 window under the pointer in the X stack. */
+static void
+solux_canvas_x11_raise(Client *c)
+{
+#ifdef XWAYLAND
+	if (!c || !client_is_x11(c) || !c->mon || client_is_unmanaged(c) ||
+		c->isfullscreen || !c->surface.xwayland ||
+		!solux_canvas_active(c->mon))
+		return;
+	wlr_xwayland_surface_restack(c->surface.xwayland, NULL, XCB_STACK_MODE_ABOVE);
+#else
+	(void)c;
+#endif
+}
+
+static void
+solux_canvas_x11_rebase_child(Client *c, Client *parent)
+{
+#ifdef XWAYLAND
+	if (!c || !parent || !client_is_x11(c) || !client_is_x11(parent) ||
+		client_is_unmanaged(c) || client_is_unmanaged(parent) ||
+		!parent->mon || parent->isfullscreen || !parent->surface.xwayland ||
+		!solux_canvas_active(parent->mon))
+		return;
+	c->geom.x += parent->geom.x - parent->surface.xwayland->x;
+	c->geom.y += parent->geom.y - parent->surface.xwayland->y;
+#else
+	(void)c;
+	(void)parent;
+#endif
+}
+
+
 /*
  * A window dropped on another monitor keeps the spot where it was released.
  * Client::geom is world geometry of the monitor's own camera, so reusing the
@@ -377,6 +473,7 @@ solux_canvas_apply_client(Client *c)
 	 * (foot/Chromium are common examples): an absolute destination size for
 	 * every buffer turns a child buffer into a large solid rectangle. */
 	wlr_scene_node_set_position(&c->scene->node, visual.x, visual.y);
+	solux_canvas_x11_sync(c);
 	nfloat_apply_canvas_client(c, visual, zoom);
 	solux_canvas_update_decorations(c, visual, zoom);
 
