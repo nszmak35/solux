@@ -1,4 +1,4 @@
-/* Solux animation core. Adapted from mangowc's animation implementation. */
+/* Solux animation core, adapted from mangowc's animation implementation. */
 #ifndef SOLUX_ANIMATION_COMMON_H
 #define SOLUX_ANIMATION_COMMON_H
 
@@ -109,18 +109,10 @@ static double solux_animation_factor(double t, int type)
 	return p[hi].y;
 }
 
-/* Time of the frame being built (0 outside of rendermon).  Every animation of
- * one frame -- windows, camera, tag switch -- is sampled at the same instant.
- * Sampling the clock separately for each of them shifted the windows against
- * the camera by a few milliseconds per frame, which shows up as jitter in
- * screen recordings, where frames are already delivered unevenly. */
 static uint64_t solux_frame_clock_ms;
 
 static uint64_t solux_animation_real_ms(void)
 {
-	/* Keep the public animation state in milliseconds, but sample the clock with
-	 * nanosecond precision before converting. This avoids visible quantisation
-	 * when a frame lands around a millisecond boundary. */
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
@@ -143,8 +135,6 @@ static void solux_animation_schedule(Monitor *m)
 		wlr_output_schedule_frame(m->wlr_output);
 }
 
-/* Snapshot the visual part of a scene tree so close animations can continue
- * after the original Wayland surface has been unmapped/destroyed. */
 static bool solux_scene_snapshot_node(struct wlr_scene_node *node, int32_t lx,
 		int32_t ly, struct wlr_scene_tree *parent)
 {
@@ -191,8 +181,6 @@ static bool solux_scene_snapshot_node(struct wlr_scene_node *node, int32_t lx,
 		break;
 	}
 	case WLR_SCENE_NODE_RECT:
-		/* Borders are recomputed by the live client and are intentionally not
-		 * copied. This matches mangowc's snapshot path and avoids stale geometry. */
 		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
 		break;
@@ -275,14 +263,9 @@ static void animation_buffer_scale_apply(struct wlr_scene_buffer *b, int32_t sx,
 
 	surface = scene_surface->surface;
 
-	/* XDG popups are separate transient surfaces.  Never resize them as part
-	 * of the parent toplevel animation.  This check must happen BEFORE the
-	 * scaling block: doing it afterwards still scales Chromium's hover
-	 * previews/tooltips and makes them visibly grow/shrink with the window. */
 	if (wlr_xdg_popup_try_from_wlr_surface(surface) != NULL)
 		return;
 
-	/* Firefox/Qt render into subsurfaces: scale them together with the root. */
 	if (bd->follow_root && bd->root && bd->should_scale &&
 		surface != bd->root && wlr_subsurface_try_from_wlr_surface(surface) != NULL &&
 		wlr_surface_get_root_surface(surface) == bd->root) {
@@ -291,10 +274,6 @@ static void animation_buffer_scale_apply(struct wlr_scene_buffer *b, int32_t sx,
 		return;
 	}
 
-	/* Match MangoWC's animation buffer path.  The animation must resize only
-	 * the actual toplevel buffer.  Chromium creates XDG popups/subsurfaces for
-	 * tab previews, tooltips, menus, etc.; resizing those buffers together with
-	 * the parent produces the clipped/expanded mini-window seen during hover. */
 	if (bd->should_scale) {
 		surface_width = surface->current.width;
 		surface_height = surface->current.height;
@@ -311,7 +290,6 @@ static void animation_buffer_scale_apply(struct wlr_scene_buffer *b, int32_t sx,
 			wlr_subsurface_try_from_wlr_surface(surface) == NULL)
 			surface_height = bd->height;
 
-		/* Never resize a subsurface beyond its own geometry. */
 		if (surface_width > bd->width &&
 			wlr_subsurface_try_from_wlr_surface(surface) != NULL)
 			return;
@@ -373,8 +351,6 @@ static void solux_animation_reset_buffer_visual(struct wlr_scene_buffer *b, int3
 	if (!surface)
 		return;
 
-	/* Restore exactly the unanimated SceneFX buffer state.  In particular,
-	 * discard any destination size left by a previous MOVE/OPEN frame. */
 	wlr_scene_buffer_set_dest_size(b, MAX(1, surface->current.width),
 		MAX(1, surface->current.height));
 	if (b->node.parent && surface != client_surface(c) &&

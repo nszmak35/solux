@@ -1,8 +1,4 @@
-/*
- * Client helpers kept separate from dwl.c.
- * This is the normal dwl client helper header; animation headers stay in
- * animations/ and contain only animation code.
- */
+/* Client helpers kept separate from solux.c. */
 #ifndef SOLUX_CLIENT_H
 #define SOLUX_CLIENT_H
 
@@ -275,7 +271,6 @@ client_has_children(Client *c)
 	if (client_is_x11(c))
 		return !wl_list_empty(&c->surface.xwayland->children);
 #endif
-	/* The xdg link contains the surface itself. */
 	return wl_list_length(&c->surface.xdg->link) > 1;
 }
 
@@ -375,4 +370,4 @@ client_set_suspended(Client *c, int suspended)
 	wlr_xdg_toplevel_set_suspended(c->surface.xdg->toplevel, suspended);
 }
 
-#endif /* SOLUX_CLIENT_H */
+#endif

@@ -35,7 +35,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 
 	if (e->type == DNX_SCALAR) {
 		dnx_load_scalar(e);
-		/* Keep invalid negative/wrapped border sizes out of rendering code. */
 		dnx_sanitize_border_widths();
 		return 0;
 	}
@@ -84,7 +83,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			rules_len = ++dnx_rules_n;
 		}
 	} else if (!strcasecmp(e->key, "layouts") && e->count >= 2) {
-		/* dnx_layouts_n tracks this table across parser entries. */
 		if (e->source == 1 && !dnx_user_table_started[1]) {
 			dnx_layouts_n = 0;
 			layouts_len = 0;
@@ -100,7 +98,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			layouts_len = dnx_layouts_n;
 		}
 	} else if ((!strcasecmp(e->key, "monrules") || !strcasecmp(e->key, "monitors")) && e->count >= 8) {
-		/* dnx_monrules_n tracks this table across parser entries. */
 		if (e->source == 1 && !dnx_user_table_started[2]) {
 			dnx_monrules_n = 0; monrules_len = 0; dnx_user_table_started[2] = 1;
 		}
@@ -111,9 +108,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			monrules[dnx_monrules_n].mfact = strtof(e->items[1], NULL);
 			monrules[dnx_monrules_n].nmaster = atoi(e->items[2]);
 			monrules[dnx_monrules_n].scale = strtof(e->items[3], NULL);
-			/* Keep the exact value from %monrules.  %layouts may appear later
-			 * in config.py, so resolve the layout only after the whole config
-			 * has been parsed. */
 			monrules[dnx_monrules_n].ltname = dnx_is_null(e->items[4]) ? NULL : dnx_strdup(e->items[4]);
 			{
 				int li = dnx_layout_index(e->items[4]);
@@ -125,7 +119,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			monrules_len = ++dnx_monrules_n;
 		}
 	} else if (!strcasecmp(e->key, "keys") && e->count >= 3) {
-		/* dnx_keys_n tracks this table across parser entries. */
 		if (e->source == 1 && !dnx_user_table_started[3]) {
 			dnx_keys_n = 0; keys_len = 0; dnx_user_table_started[3] = 1;
 		}
@@ -212,7 +205,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			keys_len = ++dnx_keys_n;
 		}
 	} else if (!strcasecmp(e->key, "buttons") && e->count >= 4) {
-		/* dnx_buttons_n tracks this table across parser entries. */
 		if (e->source == 1 && !dnx_user_table_started[4]) {
 			dnx_buttons_n = 0; buttons_len = 0; dnx_user_table_started[4] = 1;
 		}
@@ -288,7 +280,6 @@ dnx_entry_cb(const DnxEntry *e, void *userdata)
 			buttons_len = ++dnx_buttons_n;
 		}
 	} else if (!strcasecmp(e->key, "gestures") && e->count >= 4) {
-		/* Gesture entries: type, direction, fingers, action, [argument], [modifier]. */
 		if (e->source == 1 && !dnx_user_table_started[5]) {
 			dnx_gestures_n = 0;
 			gestures_len = 0;
@@ -465,7 +456,6 @@ dnx_default_config_path(void)
 		}
 	}
 
-	/* Keep the canonical path in the diagnostic even when it is absent. */
 	return DEF_CFG;
 }
 
@@ -494,8 +484,6 @@ dnx_add_builtin_tty_keys(void)
 	for (i = 0; i < LENGTH(builtin_tty_keys); i++) {
 		int overridden = 0;
 
-		/* A config.py entry for the same combination overrides the
-		 * built-in TTY binding, regardless of which command it uses. */
 		for (j = 0; j < keys_len; j++) {
 			if (keys[j].mod == builtin_tty_keys[i].mod &&
 				keys[j].keysym == builtin_tty_keys[i].keysym) {
@@ -537,7 +525,6 @@ load_dnx_config(void)
 	char usercfg[PATH_MAX];
 	const char *home;
 
-	/* If the normal per-user config is missing, use the system default. */
 	if (!dnx_config_override) {
 		home = getenv("HOME");
 		if (home && *home) {
@@ -559,9 +546,6 @@ load_dnx_config(void)
 	layouts_len = LENGTH(default_layouts);
 	dnx_reset_parser_state();
 	dnx_init_dynamic_config();
-	/* An explicitly supplied config that yields no DNX entries is treated as
-	 * invalid.  Check it before applying anything, so the fallback does not
-	 * leave partially loaded configuration behind. */
 	if (dnx_config_override && strcmp(usrcfg, SOLUX_STANDARD_CFG) != 0) {
 		size_t user_entries = 0;
 		dnx_foreach_ff(defcfg, usrcfg, dnx_count_user_entries_cb, &user_entries);
@@ -577,11 +561,8 @@ load_dnx_config(void)
 	
 
 
-	/* Second pass: apply the actual configuration. */
 	int loaded = dnx_foreach_ff(defcfg, usrcfg, dnx_entry_cb, NULL);
 
-	/* %monrules can legally appear before %layouts. Resolve its layout names
-	 * now, after every %layouts entry from config.py has been loaded. */
 	dnx_resolve_monrule_layouts();
 
 	if (!loaded)
@@ -590,8 +571,6 @@ load_dnx_config(void)
 
 	tagcount = dnx_tag_n > 0 ? dnx_tag_n : 9;
 
-	/* Keep the built-in TTY shortcuts as a fallback when config.py does
-	 * not define those key combinations. */
 	dnx_add_builtin_tty_keys();
 }
 
@@ -610,9 +589,6 @@ reload_config(const Arg *arg)
 	bool animate_layout_reload;
 	(void)arg;
 
-	/* Validate the complete Python configuration before touching any live state.
-	 * If Python reports a syntax/runtime error, the old configuration stays
-	 * active and the reload is aborted atomically. */
 	{
 		const char *defcfg = dnx_default_config_path();
 		const char *usrcfg = dnx_config_override ? dnx_config_override : USR_CFG;
@@ -638,11 +614,8 @@ reload_config(const Arg *arg)
 		}
 	}
 
-	/* Autostart is configuration state; reloading must NOT execute it again. */
 	dnx_autostart_clear();
 
-	/* A configuration reload must apply layout changes immediately.  Do not
-	 * let the normal move animation interpolate the new geometry. */
 	{
 		Client *c;
 		wl_list_for_each(c, &clients, link) {
@@ -654,10 +627,6 @@ reload_config(const Arg *arg)
 		}
 	}
 
-	/*
-	 * Recreate the dynamic tables from their built-in defaults.  The parser
-	 * then applies config.py on top of them exactly as it does at startup.
-	 */
 	if (rules) {
 		for (i = 0; i < rules_len; i++) {
 			free(rules[i].appid);
@@ -695,8 +664,6 @@ reload_config(const Arg *arg)
 	buttons_len = buttons_cap = 0;
 	gestures_len = gestures_cap = 0;
 
-	/* Reset XKB rules before parsing the new config. Without this, old
-	 * keyboard_options may survive reload and get combined with the new one. */
 	xkb_rules = (struct xkb_rule_names) {
 		.layout = "us,ru",
 		.options = "grp:win_space_toggle",
@@ -710,16 +677,10 @@ reload_config(const Arg *arg)
 	memset(layout_symbol_owned, 0, sizeof(layout_symbol_owned));
 	layouts_len = LENGTH(default_layouts);
 
-	/* Reset every scalar setting to the compiled-in default so a value removed
-	 * from config.py cannot survive a successful reload. */
 	dnx_reset_scalar_config();
 
 	load_dnx_config();
 
-	/* The binary tree is meaningful only while mouse-dependent Dwindle is
-	 * enabled.  If the mode itself changes, discard the old tree so the next
-	 * Dwindle arrange rebuilds it from the currently visible clients instead of
-	 * reusing a structure produced under the other layout path. */
 	if (old_dwindle_mouse_client != dwindle_mouse_client) {
 		wl_list_for_each(m, &mons, link) {
 			for (i = 0; i <= TAGCOUNT; i++) {
@@ -791,28 +752,13 @@ reload_config(const Arg *arg)
 		}
 	}
 
-	/* Apply modkey and keyboard changes from config.py without restarting dwl. */
 	apply_runtime_modkey();
 	reload_runtime_keymap();
 	reapply_pointer_config();
 
-	/*
-	 * A reload may remove or reorder %layouts.  Never leave a monitor or
-	 * per-tag layout pointer referring to a layout outside the active list.
-	 */
 	if (!layouts_len)
 		return;
 
-	/*
-	 * If the reload changes layout geometry (gaps or dwindle parameters), keep
-	 * the geometry captured above alive while updatemons() performs its normal
-	 * monitor/output refresh.  updatemons() calls arrange(), so enabling the
-	 * animation path here makes that first arrange produce the real MOVE target
-	 * instead of replacing the saved origin with the new geometry.
-	 */
-	/* Apply monitor rules to all existing outputs before recalculating geometry.
-	 * A monitor rule can also change the active layout, master count or mfact;
-	 * those are layout changes too and must use the same MOVE animation path. */
 	wl_list_for_each(m, &mons, link) {
 		const Layout *oldlt = m->lt[m->sellt];
 		void (*oldarrange)(Monitor *) = oldlt ? oldlt->arrange : NULL;
@@ -824,9 +770,6 @@ reload_config(const Arg *arg)
 			oldarrange != m->lt[m->sellt]->arrange)
 			animate_layout_reload = true;
 
-		/* Any reload whose resulting monitor layout is tiled must return existing
-		 * floating clients to the layout. Keep their current geometry as the
-		 * animation origin so the transition is visible instead of jumping. */
 		if (m->lt[m->sellt]->arrange) {
 			Client *c;
 			wl_list_for_each(c, &clients, link) {
@@ -846,8 +789,6 @@ reload_config(const Arg *arg)
 		}
 	}
 
-	/* monrules can be the only reason the layout changed. Enable animation
-	 * only after all monitor rules and float->tile conversions are complete. */
 	if (animate_layout_reload) {
 		Client *c;
 		wl_list_for_each(c, &clients, link) {
@@ -865,10 +806,8 @@ reload_config(const Arg *arg)
 		if (m->fullscreen_bg)
 			wlr_scene_rect_set_color(m->fullscreen_bg, fullscreen_bg);
 
-		/* Apply the current config.py gaps setting to existing monitors. */
 		m->gaps = gaps;
 
-		/* Apply a changed tag count to already-running monitor/client state. */
 		m->tagset[0] &= TAGMASK;
 		m->tagset[1] &= TAGMASK;
 		if (!m->tagset[0])
@@ -916,9 +855,6 @@ reload_config(const Arg *arg)
 		ext_workspace_printstatus(m);
 	}
 
-	/* Layout geometry has been installed as the animation target.  Restore
-	 * normal animation behavior without cancelling the MOVE animations that
-	 * were just started by solux_animation_relayout(). */
 	{
 		Client *c;
 		wl_list_for_each(c, &clients, link) {
@@ -933,7 +869,6 @@ reload_config(const Arg *arg)
 static void
 apply_runtime_modkey(void)
 {
-	/* MODKEY is resolved at match time; never rewrite bindings here. */
 }
 
 #endif

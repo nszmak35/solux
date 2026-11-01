@@ -2,12 +2,6 @@
 #ifndef SOLUX_CONFIG_CONFIG_SCALAR_H
 #define SOLUX_CONFIG_CONFIG_SCALAR_H
 
-/*
- * Border widths are unsigned throughout Solux.  Never use strtoul() directly
- * for them: "-1" would otherwise wrap to a very large unsigned value and can
- * make wlroots geometry invalid.  Parse as a signed value first and clamp all
- * negative (and malformed/out-of-range) values to zero.
- */
 static unsigned int
 dnx_nonnegative_uint(const char *s)
 {
@@ -20,14 +14,12 @@ dnx_nonnegative_uint(const char *s)
 	while (isspace((unsigned char)*s))
 		s++;
 
-	/* A leading minus is always invalid for a size/width. */
 	if (*s == '-')
 		return 0;
 
 	errno = 0;
 	value = strtoull(s, &end, 0);
 
-	/* Reject empty/malformed values and clamp overflow. */
 	if (s == end || errno == ERANGE)
 		return 0;
 	while (isspace((unsigned char)*end))
@@ -40,12 +32,9 @@ dnx_nonnegative_uint(const char *s)
 	return (unsigned int)value;
 }
 
-/* Last line of defence: these values must never be negative/wrapped. */
 static void
 dnx_sanitize_border_widths(void)
 {
-	/* They are unsigned, so a wrapped negative value is always larger than
-	 * INT_MAX.  Reset it instead of letting it reach geometry calculations. */
 	if (borderpx > INT_MAX)
 		borderpx = 0;
 	if (borderspx > INT_MAX)
@@ -196,7 +185,6 @@ dnx_load_scalar(const DnxEntry *e)
 
 	if (!k || !v) return;
 
-	/* animations */
 	if (!strcasecmp(k, "animations")) animations = dnx_bool_value(v, animations);
 		else if (!strcasecmp(k, "animation_fade_in")) animation_fade_in = dnx_bool_value(v, animation_fade_in);
 	else if (!strcasecmp(k, "animation_fade_out")) animation_fade_out = dnx_bool_value(v, animation_fade_out);
@@ -227,7 +215,6 @@ dnx_load_scalar(const DnxEntry *e)
 		}
 	}
 
-	/* dwindle */
 	if (!strcasecmp(k, "dwindle_type")) {
 		char *x = dnx_unquote_value(v);
 		if (x) {
@@ -243,7 +230,6 @@ dnx_load_scalar(const DnxEntry *e)
 	else if (!strcasecmp(k, "dwindle_mirror")) dwindle_mirror = dnx_bool_value(v, dwindle_mirror);
 	else if (!strcasecmp(k, "dwindle_mouse_client")) dwindle_mouse_client = dnx_bool_value(v, dwindle_mouse_client);
 
-	/* appearance */
 	if (!strcasecmp(k, "sloppyfocus")) sloppyfocus = atoi(v);
 	else if (!strcasecmp(k, "bypass_surface_visibility")) bypass_surface_visibility = atoi(v);
 	else if (!strcasecmp(k, "borderpx")) borderpx = dnx_nonnegative_uint(v);
@@ -271,7 +257,6 @@ dnx_load_scalar(const DnxEntry *e)
 		else log_level = atoi(v);
 	}
 
-	/* modifier key */
 	else if (!strcasecmp(k, "modkey")) {
 		if (!strcasecmp(v, "alt"))
 			runtime_modkey = WLR_MODIFIER_ALT;
@@ -279,12 +264,10 @@ dnx_load_scalar(const DnxEntry *e)
 			runtime_modkey = WLR_MODIFIER_LOGO;
 	}
 
-	/* gaps */
 	else if (!strcasecmp(k, "gappx")) gappx = atoi(v);
 	else if (!strcasecmp(k, "smartgaps")) smartgaps = atoi(v);
 	else if (!strcasecmp(k, "gaps")) gaps = atoi(v);
 
-	/* blur */
 	else if (!strcasecmp(k, "blur")) scenefx_blur = dnx_bool_value(v, scenefx_blur);
 	else if (!strcasecmp(k, "blur_xray")) scenefx_blur_xray = dnx_bool_value(v, scenefx_blur_xray);
 	else if (!strcasecmp(k, "blur_ignore_transparent")) scenefx_blur_ignore_transparent = dnx_bool_value(v, scenefx_blur_ignore_transparent);
@@ -295,7 +278,6 @@ dnx_load_scalar(const DnxEntry *e)
 	else if (!strcasecmp(k, "blur_contrast")) scenefx_blur_contrast = strtof(v, NULL);
 	else if (!strcasecmp(k, "blur_saturation")) scenefx_blur_saturation = strtof(v, NULL);
 
-	/* borders */
 	else if (!strcasecmp(k, "urgentcolor")) dnx_set_hex_rgba(urgentcolor, v);
 	else if (!strcasecmp(k, "bordercolor")) dnx_set_hex_rgba(bordercolor, v);
 	else if (!strcasecmp(k, "focuscolor")) dnx_set_hex_rgba(focuscolor, v);
@@ -318,7 +300,6 @@ dnx_load_scalar(const DnxEntry *e)
 	}
 	else if (!strcasecmp(k, "borders_only_floating")) borders_only_floating = atoi(v);
 
-	/* input */
 	else if (!strcasecmp(k, "keyboard_rules")) { char *x=dnx_unquote_value(v); if(x) xkb_rules.rules=x; }
 	else if (!strcasecmp(k, "keyboard_model")) { char *x=dnx_unquote_value(v); if(x) xkb_rules.model=x; }
 	else if (!strcasecmp(k, "keyboard_layout")) { char *x=dnx_unquote_value(v); if(x) xkb_rules.layout=x; }

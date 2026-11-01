@@ -1,5 +1,4 @@
 # Default Solux configuration in Python.
-# Edit ~/.config/solux/config.py to override these values.
 
 class Appearance:
     sloppyfocus = True
@@ -181,7 +180,6 @@ keys = [
 for vt in range(1, 13):
     keys.append(["CTRL|ALT", f"XF86Switch_VT_{vt}", "chvt", vt, "ui"])
 
-# Tag bindings: the same semantics as the original TAGKEYS definitions.
 for i in range(1, 10):
     mask = 1 << (i - 1)
     keys.extend([
@@ -191,7 +189,6 @@ for i in range(1, 10):
         ["MODKEY|CTRL|SHIFT", ["exclam", "at", "numbersign", "dollar", "percent", "asciicircum", "ampersand", "asterisk", "parenleft"][i-1], "toggletag", mask, "ui"],
     ])
 
-# Float-layout canvas controls. These actions are ignored outside Float layout.
 keys.extend([
     ["MODKEY|SHIFT", "Left", "movecanvas", 0, "int"],
     ["MODKEY|SHIFT", "Right", "movecanvas", 1, "int"],
@@ -202,7 +199,6 @@ keys.extend([
 ])
 
 buttons = [
-    # Pan the Float canvas by dragging with the configured modifier + mouse button.
     ["ClkClient", "MODKEY|SHIFT", "BTN_LEFT", "canvasdrag", 0],
     ["ClkRoot", "MODKEY|SHIFT", "BTN_LEFT", "canvasdrag", 0],
     ["ClkClient", "MODKEY", "BTN_LEFT", "moveresize", 2],

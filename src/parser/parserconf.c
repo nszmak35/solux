@@ -142,10 +142,6 @@ static int emit_rules(Parser *p, PyObject *value)
             Py_DECREF(item);
             continue;
         }
-        /* New rules format:
-         * {"appid": str, "workspace": int, "floating": bool,
-         *  "fullscreen": bool, "monitor": int|string}
-         * Missing values are represented by the runtime defaults. */
         row = PyTuple_New(5);
         if (!row) { Py_DECREF(item); return -1; }
 
@@ -182,7 +178,6 @@ static int emit_list(Parser *p, const char *key, PyObject *value)
 		PyObject *item = PySequence_GetItem(value, i);
 		int rc;
 		if (!item) return -1;
-		/* tags and simple lists use one value per entry. */
 		if (!PyList_Check(item) && !PyTuple_Check(item)) {
 			PyObject *row = PyTuple_Pack(1, item);
 			Py_DECREF(item);
@@ -219,11 +214,6 @@ static int emit_class(Parser *p, PyObject *klass)
 		value = PyObject_GetItem(mapping, key);
 		Py_DECREF(key);
 		if (!value) { PyErr_Clear(); continue; }
-		/* Most class attributes must be scalar configuration values.
-		 * The exception is the CSV-style settings: Python users may write
-		 * fullscreen_bg / animation_curve_* either as a string or as a
-		 * list/tuple of numbers.  DNX accepted the resulting comma-separated
-		 * representation, so keep both forms equivalent. */
 		if (PyList_Check(value) || PyTuple_Check(value)) {
 			if (is_csv_key(name))
 				rc = emit_scalar(p, name, value);
@@ -398,7 +388,6 @@ int dnx_validate_ff(const char *default_path, const char *user_path)
 	p.userdata = NULL;
 	p.source = 0;
 
-	/* Missing files are allowed; parse errors are not. */
 	if (default_path && access(default_path, R_OK) == 0) {
 		rc = parse_file(&p, default_path);
 		if (rc < 0)

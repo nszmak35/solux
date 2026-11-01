@@ -1,7 +1,4 @@
-/*
- * This an unstable interface of wlroots. No guarantees are made regarding the
- * future consistency of this API.
- */
+/* Unstable wlroots interface: no API guarantees. */
 #ifndef WLR_USE_UNSTABLE
 #error "Add -DWLR_USE_UNSTABLE to enable unstable wlroots features"
 #endif
@@ -24,48 +21,48 @@ enum wlr_ext_workspace_v1_request_type {
 
 struct wlr_ext_workspace_v1_request {
 	enum wlr_ext_workspace_v1_request_type type;
-	struct wl_list link; // wlr_ext_workspace_manager_v1_resource.requests
+	struct wl_list link;
 	union {
 		struct {
 			char *name;
 			struct wlr_ext_workspace_group_handle_v1
-				*group; // NULL if destroyed
+				*group;
 		} create_workspace;
 		struct {
-			struct wlr_ext_workspace_handle_v1 *workspace; // NULL if destroyed
+			struct wlr_ext_workspace_handle_v1 *workspace;
 		} activate;
 		struct {
-			struct wlr_ext_workspace_handle_v1 *workspace; // NULL if destroyed
+			struct wlr_ext_workspace_handle_v1 *workspace;
 		} deactivate;
 		struct {
-			struct wlr_ext_workspace_handle_v1 *workspace; // NULL if destroyed
+			struct wlr_ext_workspace_handle_v1 *workspace;
 			struct wlr_ext_workspace_group_handle_v1
-				*group; // NULL if destroyed
+				*group;
 		} assign;
 		struct {
-			struct wlr_ext_workspace_handle_v1 *workspace; // NULL if destroyed
+			struct wlr_ext_workspace_handle_v1 *workspace;
 		} remove;
 	};
 };
 
 struct wlr_ext_workspace_v1_commit_event {
-	struct wl_list *requests; // wlr_ext_workspace_v1_request.link
+	struct wl_list *requests;
 };
 
 struct wlr_ext_workspace_manager_v1 {
 	struct wl_global *global;
-	struct wl_list groups;	   // wlr_ext_workspace_group_handle_v1.link
-	struct wl_list workspaces; // wlr_ext_workspace_handle_v1.link
+	struct wl_list groups;
+	struct wl_list workspaces;
 
 	struct {
-		struct wl_signal commit; // wlr_ext_workspace_v1_commit_event
+		struct wl_signal commit;
 		struct wl_signal destroy;
 	} events;
 
 	void *data;
 
 	struct {
-		struct wl_list resources; // wlr_ext_workspace_manager_v1_resource.link
+		struct wl_list resources;
 		struct wl_event_source *idle_source;
 		struct wl_event_loop *event_loop;
 		struct wl_listener display_destroy;
@@ -74,40 +71,40 @@ struct wlr_ext_workspace_manager_v1 {
 
 struct wlr_ext_workspace_group_handle_v1 {
 	struct wlr_ext_workspace_manager_v1 *manager;
-	uint32_t caps; // ext_workspace_group_handle_v1_group_capabilities
+	uint32_t caps;
 	struct {
 		struct wl_signal destroy;
 	} events;
 
-	struct wl_list link; // wlr_ext_workspace_manager_v1.groups
+	struct wl_list link;
 
 	void *data;
 
 	struct {
-		struct wl_list outputs;	  // wlr_ext_workspace_v1_group_output.link
-		struct wl_list resources; // wlr_ext_workspace_manager_v1_resource.link
+		struct wl_list outputs;
+		struct wl_list resources;
 	};
 };
 
 struct wlr_ext_workspace_handle_v1 {
 	struct wlr_ext_workspace_manager_v1 *manager;
-	struct wlr_ext_workspace_group_handle_v1 *group; // May be NULL
+	struct wlr_ext_workspace_group_handle_v1 *group;
 	char *id;
 	char *name;
 	struct wl_array coordinates;
-	uint32_t caps;	// ext_workspace_handle_v1_workspace_capabilities
-	uint32_t state; // ext_workspace_handle_v1_state
+	uint32_t caps;
+	uint32_t state;
 
 	struct {
 		struct wl_signal destroy;
 	} events;
 
-	struct wl_list link; // wlr_ext_workspace_manager_v1.workspaces
+	struct wl_list link;
 
 	void *data;
 
 	struct {
-		struct wl_list resources; // wlr_ext_workspace_v1_resource.link
+		struct wl_list resources;
 	};
 };
 

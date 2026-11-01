@@ -49,7 +49,6 @@ dnx_init_dynamic_config(void)
 	memcpy(monrules, default_monrules, LENGTH(default_monrules) * sizeof(*monrules));
 	monrules_len = LENGTH(default_monrules);
 
-	/* Keys/buttons/gestures come exclusively from config.py. */
 	keys = NULL;
 	keys_len = keys_cap = 0;
 	buttons = NULL;
@@ -212,7 +211,6 @@ dnx_layout_index(const char *s)
 	if (!s)
 		return -1;
 
-	/* Numeric layout indexes are accepted as before. */
 	n = strtol(s, &end, 0);
 	if (end != s && !*end && n >= 0 && n < (long)layouts_len)
 		return (int)n;
@@ -243,7 +241,6 @@ dnx_layout_index(const char *s)
 		if (layouts[i].symbol && !strcasecmp(layouts[i].symbol, s))
 			return (int)i;
 
-		/* Match the normalized name against the displayed symbol too. */
 		if (layouts[i].symbol) {
 			const char *sp = layouts[i].symbol;
 			while (isspace((unsigned char)*sp))

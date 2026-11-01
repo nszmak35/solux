@@ -4,8 +4,6 @@
 	(EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_ACTIVATE | \
 	 EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_DEACTIVATE)
 
-/* types */
-
 struct ext_workspace {
 	struct wl_list link;           
 	uint32_t tag;                  
@@ -13,14 +11,10 @@ struct ext_workspace {
 	struct wlr_ext_workspace_handle_v1 *handle;
 };
 
-/* global */
-
 static struct wlr_ext_workspace_manager_v1 *ext_workspace_manager;
 static struct wl_list ext_workspaces; 
 static struct wl_listener ext_commit_listener;
 static struct wl_listener ext_destroy_listener;
-
-/* helpers */
 
 static int
 get_tag_status(uint32_t tag, Monitor *m)
@@ -51,8 +45,6 @@ tag_name(uint32_t tag)
 	return "?";
 }
 
-/* workspace lifecycle */
-
 static void
 ext_workspace_destroy(struct ext_workspace *ws)
 {
@@ -78,8 +70,6 @@ ext_workspace_create(uint32_t tag, Monitor *m)
 
 	wl_list_insert(ext_workspaces.prev, &ws->link);
 }
-
-/* monitor integration */
 
 static void
 ext_workspace_createmon(Monitor *m)
@@ -109,8 +99,6 @@ ext_workspace_cleanupmon(Monitor *m)
 	m->ext_group = NULL;
 }
 
-/* status */
-
 static void
 ext_workspace_printstatus(Monitor *m)
 {
@@ -128,8 +116,6 @@ ext_workspace_printstatus(Monitor *m)
 		wlr_ext_workspace_handle_v1_set_active(ws->handle, active);
 	}
 }
-
-/* commit handler */
 
 static void
 handle_ext_commit(struct wl_listener *listener, void *data)
@@ -175,8 +161,6 @@ handle_ext_commit(struct wl_listener *listener, void *data)
 		}
 	}
 }
-
-/* init */
 
 static void
 handle_ext_destroy(struct wl_listener *listener, void *data)

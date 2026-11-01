@@ -31,8 +31,6 @@ ongesture(struct wlr_pointer_swipe_end_event *event)
 	for (g = gestures; g < gestures + gestures_len; g++) {
 		uint32_t want = g->mod;
 
-		/* MODKEY is a symbolic modifier. Resolve it exactly like key and
-		 * button bindings, so gestures also work with modkey=alt. */
 		if (want & MODKEY)
 			want = (want & ~MODKEY) | runtime_modkey;
 

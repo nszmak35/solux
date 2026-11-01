@@ -26,10 +26,8 @@ factivatenotify(struct wl_listener *listener, void *data)
 	if (!c || !(m = c->mon))
 		return;
 
-	/* If the window is on another output, switch focus to that output. */
 	selmon = m;
 
-	/* Show the client's existing tags instead of changing c->tags. */
 	if (c->tags && c->tags != m->tagset[m->seltags]) {
 		Arg a = { .ui = c->tags };
 		view(&a);

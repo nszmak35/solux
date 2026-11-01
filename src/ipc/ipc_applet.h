@@ -138,7 +138,6 @@ soluxctl_handle_fd(int fd, uint32_t mask, void *data)
 	}
 	buf[n] = '\0';
 
-	/* Accept exactly one line; never execute arbitrary shell commands. */
 	end = strpbrk(buf, "\r\n");
 	if (end)
 		*end = '\0';
@@ -194,7 +193,6 @@ soluxctl_init(void)
 	addr.sun_family = AF_UNIX;
 	snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", soluxctl_socket_path);
 
-	/* Only the current user may talk to the control socket. */
 	unlink(addr.sun_path);
 	oldmask = umask(0077);
 	if (bind(soluxctl_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {

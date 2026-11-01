@@ -15,35 +15,31 @@ struct wlr_ext_workspace_v1_group_output {
 	struct wl_list link;
 };
 
-// These structs wrap wl_resource of each interface to access the request queue
-// (wlr_ext_workspace_manager_v1_resource.requests) assigned per manager
-// resource
-
 struct wlr_ext_workspace_manager_v1_resource {
 	struct wl_resource *resource;
 	struct wlr_ext_workspace_manager_v1 *manager;
-	struct wl_list requests;			// wlr_ext_workspace_v1_request.link
-	struct wl_list workspace_resources; // wlr_ext_workspace_v1_resource.link
-	struct wl_list group_resources; // wlr_ext_workspace_group_v1_resource.link
-	struct wl_list link;			// wlr_ext_workspace_manager_v1.resources
+	struct wl_list requests;
+	struct wl_list workspace_resources;
+	struct wl_list group_resources;
+	struct wl_list link;
 };
 
 struct wlr_ext_workspace_group_v1_resource {
 	struct wl_resource *resource;
 	struct wlr_ext_workspace_group_handle_v1 *group;
 	struct wlr_ext_workspace_manager_v1_resource *manager;
-	struct wl_list link; // wlr_ext_workspace_group_v1.resources
+	struct wl_list link;
 	struct wl_list
-		manager_resource_link; // wlr_ext_workspace_manager_v1_resource.group_resources
+		manager_resource_link;
 };
 
 struct wlr_ext_workspace_v1_resource {
 	struct wl_resource *resource;
 	struct wlr_ext_workspace_handle_v1 *workspace;
 	struct wlr_ext_workspace_manager_v1_resource *manager;
-	struct wl_list link; // wlr_ext_workspace_v1.resources
+	struct wl_list link;
 	struct wl_list
-		manager_resource_link; // wlr_ext_workspace_manager_v1_resource.workspace_resources
+		manager_resource_link;
 };
 
 static const struct ext_workspace_group_handle_v1_interface group_impl;

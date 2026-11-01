@@ -1,9 +1,4 @@
-/* Tag (workspace) switch animation.
- *
- * Outgoing windows slide off the monitor edge and incoming ones slide in from
- * the opposite side.  The offset is purely visual: it is applied to scene nodes
- * once per frame (see rendermon), so c->geom, the animation state, the camera
- * and the per-tag float geometry are never modified. */
+/* Tag (workspace) switch animation: outgoing windows slide off, incoming ones slide in. */
 #ifndef SOLUX_ANIMATION_TAG_H
 #define SOLUX_ANIMATION_TAG_H
 
@@ -75,9 +70,6 @@ solux_taganim_fbox_eq(const struct wlr_fbox *a, const struct wlr_fbox *b)
 	return a->x == b->x && a->y == b->y && a->width == b->width && a->height == b->height;
 }
 
-/* Redraw an outgoing float window with its frozen frame and zoom.  The canvas
- * code skips such windows, so a client commit would otherwise reset the zoom
- * in the middle of the transition. */
 static void
 solux_taganim_apply_frozen(Client *c)
 {
@@ -101,7 +93,6 @@ solux_taganim_apply_frozen(Client *c)
 		client_apply_shadow_geometry(c, v.width, v.height, z);
 }
 
-/* Corner radii of the visible part: corners next to the cut become square. */
 static struct fx_corner_radii
 solux_taganim_corners(const struct wlr_box *win, const struct wlr_box *v, int radius)
 {
@@ -192,7 +183,6 @@ solux_taganim_crop_shadow(Client *c, const struct wlr_box *win, const struct wlr
 	if (!c->shadow)
 		return;
 	sigma = MAX(0, (int)lroundf(c->shadow->blur_sigma));
-	/* The shadow node already carries the (zoom-scaled) radius. */
 	radius = MAX(0, c->shadow->corner_radius);
 	sb = (struct wlr_box){ win->x - sigma, win->y - sigma,
 		win->width + 2 * sigma, win->height + 2 * sigma };
@@ -246,8 +236,6 @@ solux_taganim_crop_blur(Client *c, const struct wlr_box *win, const struct wlr_b
 		.corners = cr, .area = { 0, 0, v.width, v.height } });
 }
 
-/* Borders, shadow and blur are cropped at the same seam as the window buffers
- * instead of being hidden.  clip and vis are in screen coordinates. */
 static void
 solux_taganim_crop_decor(Client *c, const struct wlr_box *clip, const struct wlr_box *vis)
 {
@@ -258,8 +246,6 @@ solux_taganim_crop_decor(Client *c, const struct wlr_box *clip, const struct wlr
 	lc = (struct wlr_box){ clip->x - vis->x, clip->y - vis->y, clip->width, clip->height };
 	win = (struct wlr_box){ 0, 0, vis->width, vis->height };
 
-	/* Decorations are first rebuilt from their logical state, then cropped, so the
-	 * crop never accumulates between frames. */
 	c->taganim_crop = lc;
 	c->taganim_crop_on = true;
 	if (c->canvas_visualized) {
@@ -329,8 +315,6 @@ typedef struct {
 	bool ok;
 } SoluxTagClipCtx;
 
-/* Crop one scene buffer of the window to ctx->clip.  Only the buffer
- * (source box, size, position) is touched, never the client geometry. */
 static void
 solux_taganim_clip_buffer(struct wlr_scene_buffer *b, int sx, int sy, void *data)
 {
@@ -481,7 +465,6 @@ solux_taganim_crop(Client *c, const struct wlr_box *clip, const struct wlr_box *
 	return true;
 }
 
-/* Remember the on-screen boxes of visible clients before the tag changes. */
 static void
 solux_taganim_freeze(Monitor *m)
 {
@@ -535,8 +518,6 @@ solux_taganim_finish(Monitor *m)
 		wlr_output_schedule_frame(m->wlr_output);
 }
 
-/* Assign roles and start the animation.  Called after tagset/curtag changed
- * and before arrange(). */
 static void
 solux_taganim_begin(Monitor *m, uint32_t oldtagset, unsigned int oldtag)
 {
@@ -584,8 +565,6 @@ solux_taganim_begin(Monitor *m, uint32_t oldtagset, unsigned int oldtag)
 	solux_animation_schedule(m);
 }
 
-/* Per-frame step: apply the offset to the scene nodes.  Called from rendermon
- * after solux_canvas_frame(). */
 static void
 solux_taganim_frame(Monitor *m)
 {

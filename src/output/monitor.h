@@ -16,7 +16,6 @@ cleanupmon(struct wl_listener *listener, void *data)
 	wl_list_for_each_safe(ipc_output, ipc_output_tmp, &m->dwl_ipc_outputs, link)
 		wl_resource_destroy(ipc_output->resource);
 
-	/* m->layers[i] are intentionally not unlinked */
 	for (i = 0; i < LENGTH(m->layers); i++) {
 		wl_list_for_each_safe(l, tmp, &m->layers[i], link)
 			wlr_layer_surface_v1_destroy(l->layer_surface);
@@ -46,7 +45,6 @@ cleanupmon(struct wl_listener *listener, void *data)
 
 	free(m->pertag);
 	closemon(m);
-	/* Forget every pointer to the monitor that is about to be freed. */
 	if (canvas_drag_mon == m) {
 		canvas_drag_mon = NULL;
 		if (cursor_mode == CurCanvasMove)
@@ -64,8 +62,6 @@ cleanupmon(struct wl_listener *listener, void *data)
 					nfloat_spawn_pending = NULL;
 			}
 		}
-		/* Close snapshots are ticked by their monitor's frame handler; with
-		 * the monitor gone they would stay on screen forever. */
 		wl_list_for_each_safe(fc, fctmp, &fadeout_clients, link) {
 			if (fc->mon != m)
 				continue;
@@ -82,14 +78,12 @@ cleanupmon(struct wl_listener *listener, void *data)
 void
 closemon(Monitor *m)
 {
-	/* update selmon if needed and
-	 * move closed monitor's clients to the focused one */
 	Client *c;
 	int i = 0, nmons = wl_list_length(&mons);
 	if (!nmons) {
 		selmon = NULL;
 	} else if (m == selmon) {
-		do /* don't switch to disabled mons */
+		do
 			selmon = wl_container_of(mons.next, selmon, link);
 		while (!selmon->wlr_output->enabled && i++ < nmons);
 
@@ -119,7 +113,6 @@ apply_monitor_rule(Monitor *m)
 	if (!m || !m->wlr_output)
 		return;
 
-	/* Exactly the same first-match semantics as createmon(). */
 	for (size_t i = 0; i < monrules_len; i++) {
 		if (!monrules[i].name || strstr(m->wlr_output->name, monrules[i].name)) {
 			r = &monrules[i];
@@ -148,10 +141,6 @@ apply_monitor_rule(Monitor *m)
 	}
 	wlr_output_state_finish(&state);
 
-	/*
-	 * Reinsert only when the rule actually changes placement semantics.
-	 * This avoids moving an automatically positioned monitor on every reload.
-	 */
 	if (position_changed && m->wlr_output->enabled) {
 		wlr_output_layout_remove(output_layout, m->wlr_output);
 		if (auto_position)
@@ -186,8 +175,6 @@ apply_monitor_rule(Monitor *m)
 void
 createmon(struct wl_listener *listener, void *data)
 {
-	/* This event is raised by the backend when a new output (aka a display or
-	 * monitor) becomes available. */
 	struct wlr_output *wlr_output = data;
 	const MonitorRule *r;
 	size_t i;
@@ -206,7 +193,6 @@ createmon(struct wl_listener *listener, void *data)
 		wl_list_init(&m->layers[i]);
 
 	wlr_output_state_init(&state);
-	/* Initialize monitor state using configured rules */
 	m->gaps = gaps;
 
 	m->tagset[0] = m->tagset[1] = 1;
@@ -228,13 +214,8 @@ createmon(struct wl_listener *listener, void *data)
 	m->canvas_zoom = m->canvas_target_zoom = 1.0;
 	m->canvas_duration = 250;
 
-	/* The mode is a tuple of (width, height, refresh rate), and each
-	 * monitor supports only a specific set of modes. We just pick the
-	 * monitor's preferred mode; a more sophisticated compositor would let
-	 * the user configure it. */
 	wlr_output_state_set_mode(&state, wlr_output_preferred_mode(wlr_output));
 
-	/* Set up event listeners */
 	LISTEN(&wlr_output->events.frame, &m->frame, rendermon);
 	LISTEN(&wlr_output->events.destroy, &m->destroy, cleanupmon);
 	LISTEN(&wlr_output->events.request_state, &m->request_state, requestmonstate);
@@ -270,7 +251,6 @@ createmon(struct wl_listener *listener, void *data)
 
 	
 
-	/* updatemons() will resize and set correct position */
 	m->fullscreen_bg = wlr_scene_rect_create(layers[LyrFS], 0, 0, fullscreen_bg);
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node, 0);
 
@@ -323,8 +303,6 @@ outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test)
 		Monitor *m = wlr_output->data;
 		struct wlr_output_state state;
 
-		/* Ensure displays previously disabled by wlr-output-power-management-v1
-		 * are properly handled*/
 		m->asleep = 0;
 
 		wlr_output_state_init(&state);
@@ -349,9 +327,6 @@ apply_or_test:
 		ok &= test ? wlr_output_test_state(wlr_output, &state)
 				: wlr_output_commit_state(wlr_output, &state);
 
-		/* Don't move monitors if position wouldn't change. This avoids
-		 * wlroots marking the output as manually configured.
-		 * wlr_output_layout_add does not like disabled outputs */
 		if (!test && wlr_output->enabled && (m->m.x != config_head->state.x || m->m.y != config_head->state.y))
 			wlr_output_layout_add(output_layout, wlr_output,
 					config_head->state.x, config_head->state.y);
@@ -365,7 +340,6 @@ apply_or_test:
 		wlr_output_configuration_v1_send_failed(config);
 	wlr_output_configuration_v1_destroy(config);
 
-	/* https://codeberg.org/dwl/dwl/issues/577 */
 	updatemons(NULL, NULL);
 }
 
@@ -386,7 +360,7 @@ powermgrsetmode(struct wl_listener *listener, void *data)
 	if (!m)
 		return;
 
-	m->gamma_lut_changed = 1; /* Reapply gamma LUT when re-enabling the output */
+	m->gamma_lut_changed = 1;
 	wlr_output_state_set_enabled(&state, event->mode);
 	wlr_output_commit_state(m->wlr_output, &state);
 
@@ -430,19 +404,10 @@ monitor_should_skip_frame(Monitor *m)
 		return false;
 	}
 
-	/* When animations are disabled, do not render the old client buffer after
-	 * a tiled resize/move has sent a new configure.  MangoWC suppresses the
-	 * frame until the client has committed that configure; otherwise the old
-	 * buffer can briefly appear scaled/transparent inside the new geometry. */
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon != m || !c->scene || !client_surface(c)->mapped ||
 			client_is_unmanaged(c) || !VISIBLEON(c, m))
 			continue;
-		/* Float-canvas geometry is applied directly to the scene on every
-		 * interactive resize. Do not stall the whole output waiting for the
-		 * client's configure ack: that turns live resize into visible lag when
-		 * animations are disabled. Keep the old skip-frame behavior for tiled
-		 * clients, where waiting avoids showing a stale buffer in new geometry. */
 		if (c->isfloating && solux_canvas_active(m))
 			continue;
 		if (c->type != XDGShell)
@@ -489,17 +454,11 @@ rendermon(struct wl_listener *listener, void *data)
 			need_more_frames = true;
 		}
 	}
-	/* Do not overwrite an animation's per-frame opacity with the normal
-	 * SceneFX focus opacity pass. */
 	wl_list_for_each(c, &clients, link) {
 		if (!c->scene || !c->scene_surface) continue;
 		if (!c->animation.running)
 			wlr_scene_node_for_each_buffer(&c->scene_surface->node, scenebuffersetopacity, c);
 		if (c->animation.running && c->mon == m) {
-			/* XWayland clients use the same scene animation path as XDG
-			 * clients.  Do not cancel their first animation frame: doing so
-			 * leaves the newly mapped X11 scene at its disabled/initial state
-			 * and makes the opening animation appear to render nothing. */
 			solux_animation_client_frame(c);
 			need_more_frames = true;
 		}
@@ -537,31 +496,26 @@ updatemons(struct wl_listener *listener, void *data)
 	struct wlr_output_configuration_head_v1 *config_head;
 	Monitor *m;
 
-	/* First remove from the layout the disabled monitors */
 	wl_list_for_each(m, &mons, link) {
 		if (m->wlr_output->enabled || m->asleep)
 			continue;
 		config_head = wlr_output_configuration_head_v1_create(config, m->wlr_output);
 		config_head->state.enabled = 0;
-		/* Remove this output from the layout to avoid cursor enter inside it */
 		wlr_output_layout_remove(output_layout, m->wlr_output);
 		closemon(m);
 		m->m = m->w = (struct wlr_box){0};
 	}
-	/* Insert outputs that need to */
 	wl_list_for_each(m, &mons, link) {
 		if (m->wlr_output->enabled
 				&& !wlr_output_layout_get(output_layout, m->wlr_output))
 			wlr_output_layout_add_auto(output_layout, m->wlr_output);
 	}
 
-	/* Now that we update the output layout we can get its box */
 	wlr_output_layout_get_box(output_layout, NULL, &sgeom);
 
 	wlr_scene_node_set_position(&root_bg->node, sgeom.x, sgeom.y);
 	wlr_scene_rect_set_size(root_bg, sgeom.width, sgeom.height);
 
-	/* Make sure the clients are hidden when dwl is locked */
 	wlr_scene_node_set_position(&locked_bg->node, sgeom.x, sgeom.y);
 	wlr_scene_rect_set_size(locked_bg, sgeom.width, sgeom.height);
 
@@ -570,7 +524,6 @@ updatemons(struct wl_listener *listener, void *data)
 			continue;
 		config_head = wlr_output_configuration_head_v1_create(config, m->wlr_output);
 
-		/* Get the effective monitor geometry to use for surfaces */
 		wlr_output_layout_get_box(output_layout, m->wlr_output, &m->m);
 		m->w = m->m;
 		wlr_scene_output_set_position(m->scene_output, m->m.x, m->m.y);
@@ -590,21 +543,16 @@ updatemons(struct wl_listener *listener, void *data)
 			wlr_session_lock_surface_v1_configure(m->lock_surface, m->m.width, m->m.height);
 		}
 
-		/* Calculate the effective monitor geometry to use for clients */
 		if (m->canvas_zoom <= 0.01) m->canvas_zoom = m->canvas_target_zoom = 1.0;
 		if (m->canvas_x == 0.0 && m->canvas_y == 0.0) {
 			m->canvas_x = m->canvas_target_x = m->m.x + m->m.width / 2.0;
 			m->canvas_y = m->canvas_target_y = m->m.y + m->m.height / 2.0;
 		}
 		arrangelayers(m);
-		/* Don't move clients to the left output when plugging monitors */
 		arrange(m);
-		/* make sure fullscreen clients have the right size */
 		if ((c = focustop(m)) && c->isfullscreen)
 			resize(c, m->m, 0);
 
-		/* Try to re-set the gamma LUT when updating monitors,
-		 * it's only really needed when enabling a disabled output, but meh. */
 		m->gamma_lut_changed = 1;
 
 		config_head->state.x = m->m.x;

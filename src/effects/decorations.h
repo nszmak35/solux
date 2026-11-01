@@ -2,12 +2,6 @@
 #ifndef SOLUX_EFFECTS_DECORATIONS_H
 #define SOLUX_EFFECTS_DECORATIONS_H
 
-/* Applies one rounded decoration ring (position, size, outer radius, inner hole).
- * Normally this is exactly the plain sequence of scene calls.  While the window
- * is cut at the seam of a tag transition (c->taganim_crop_on) the ring is
- * reduced to the visible part instead of being hidden: the hole is extended to
- * the cut edge (no border line at an artificial edge) and the hole corners that
- * touch the cut are squared.  Coordinates are window-local. */
 static void
 solux_decor_ring_apply(Client *c, struct wlr_scene_rect *ring, int x, int y,
 		int w, int h, int thickness, int radius, int inner_radius)
@@ -56,8 +50,6 @@ void
 scenebuffersetopacity(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
 {
 	Client *c = data;
-	/* xdg-popups are children of Client.scene, we do not have to worry about
-	 * messing with them. */
 	wlr_scene_buffer_set_opacity(buffer, c->isfullscreen ? 1.0f : c->opacity);
 }
 
@@ -119,10 +111,6 @@ setclientborderstate(Client *c, int state)
 		break;
 	}
 
-	/* Keep the normal border rectangles visible at all times.  SceneFX rounded
-	 * decoration nodes are an additional layer, not a replacement for the
-	 * configured border colors.  This avoids the old transparent-border state
-	 * that made borders disappear when corner radius was enabled. */
 	if (c->round_border && c->round_borders && c->round_bordere) {
 		const float *round_original = active_original;
 		const float *round_start = active_start;
@@ -234,11 +222,6 @@ in_shadow_ignore_list(const char *str)
 	return 0;
 }
 
-/* Lays out the shadow node for a window whose outer box is width x height on
- * screen.  zoom is the canvas zoom (1.0 outside the canvas): sigma, offset and
- * radius scale with it so the shadow always keeps its proportions to the
- * window.  The base sigma is kept in the client, never read back from the
- * node, so repeated calls cannot compound the zoom. */
 void
 client_apply_shadow_geometry(Client *c, int width, int height, double zoom)
 {
@@ -247,7 +230,6 @@ client_apply_shadow_geometry(Client *c, int width, int height, double zoom)
 	if (!c || !c->shadow)
 		return;
 	if (!c->shadow_base_set) {
-		/* First use: the node still holds the sigma it was created with. */
 		c->shadow_base_sigma = c->shadow->blur_sigma;
 		c->shadow_base_set = true;
 	}
@@ -269,9 +251,6 @@ client_apply_shadow_geometry(Client *c, int width, int height, double zoom)
 	});
 }
 
-/* Re-lays out the shadow from the client's current state.  Inside the Float
- * canvas the window is drawn at its zoomed screen size, so the shadow follows
- * that size and zoom; everywhere else this is the plain geom-based layout. */
 void
 client_refresh_shadow(Client *c)
 {
@@ -286,7 +265,6 @@ client_refresh_shadow(Client *c)
 		if (c->mon->taganim_active && c->taganim_role == TAGANIM_OUT &&
 				c->taganim_frozen_zoom > 0.0 &&
 				c->taganim_frozen.width > 0 && c->taganim_frozen.height > 0) {
-			/* Tag transition: the window is frozen at its old camera. */
 			box = c->taganim_frozen;
 			zoom = c->taganim_frozen_zoom;
 		} else {
@@ -325,9 +303,6 @@ update_client_rounded_borders(Client *c)
 		!(scenefx_corner_radius_only_floating && !c->isfloating) &&
 		!c->isfullscreen;
 
-	/* A rounded decoration is a replacement for the three ordinary rectangular
-	 * border sets.  Keeping both enabled was the reason an extra square frame
-	 * remained visible on top of the rounded decoration. */
 	if (!rounded) {
 		if (c->round_border)
 			wlr_scene_node_set_enabled(&c->round_border->node, 0);
@@ -343,8 +318,6 @@ update_client_rounded_borders(Client *c)
 		return;
 	}
 
-	/* Create the rounded nodes lazily.  This makes 0 -> radius -> 0 -> radius
-	 * reloads safe without ever dereferencing a partially-created node set. */
 	if (!c->round_border)
 		c->round_border = wlr_scene_rect_create(c->scene, 0, 0, bordercolor);
 	if (!c->round_borders)
@@ -359,8 +332,6 @@ update_client_rounded_borders(Client *c)
 	c->round_borders->node.data = c;
 	c->round_bordere->node.data = c;
 
-	/* Rounded decorations must sit above the client surface but below nothing
-	 * that should visually cover the configured frame. */
 	wlr_scene_node_place_above(&c->round_border->node, &c->scene_surface->node);
 	wlr_scene_node_place_above(&c->round_borders->node, &c->scene_surface->node);
 	wlr_scene_node_place_above(&c->round_bordere->node, &c->scene_surface->node);
@@ -368,18 +339,12 @@ update_client_rounded_borders(Client *c)
 	if (c->geom.width <= 0 || c->geom.height <= 0)
 		return;
 
-	/* Disable the old square rectangles while SceneFX rounding is active. */
 	for (int i = 0; i < 4; i++) {
 		wlr_scene_node_set_enabled(&c->border[i]->node, 0);
 		wlr_scene_node_set_enabled(&c->borders[i]->node, 0);
 		wlr_scene_node_set_enabled(&c->bordere[i]->node, 0);
 	}
 
-	/* ---------------------------------------------------------------
-	 * borderpx: the main/base ring.
-	 * Outer radius = requested corner radius + ring thickness.
-	 * Inner radius = the same scenefx_corner_radius.
-	 * --------------------------------------------------------------- */
 	thickness = (int)c->bw;
 	if (thickness > 0) {
 		radius = c->corner_radius + thickness;
@@ -395,10 +360,6 @@ update_client_rounded_borders(Client *c)
 		wlr_scene_node_set_enabled(&c->round_border->node, 0);
 	}
 
-	/* ---------------------------------------------------------------
-	 * borderspx: the start/outer detail ring.
-	 * Its offset is measured inward from the client rectangle.
-	 * --------------------------------------------------------------- */
 	thickness = (int)c->bws;
 	if (thickness > 0) {
 		x = (int)borderspx_offset;
@@ -418,10 +379,6 @@ update_client_rounded_borders(Client *c)
 		wlr_scene_node_set_enabled(&c->round_borders->node, 0);
 	}
 
-	/* ---------------------------------------------------------------
-	 * borderepx: the end/inner detail ring.  The geometry is kept identical
-	 * to the normal bordere geometry, but its outer and inner edges are rounded.
-	 * --------------------------------------------------------------- */
 	thickness = (int)c->bwe;
 	if (thickness > 0) {
 		x = (int)c->bw - thickness - (int)borderepx_negative_offset;
@@ -524,8 +481,6 @@ update_client_focus_decorations(Client *c, int focused, int urgent)
 	if (!c)
 		return;
 
-	/* Border colors and rounded-border visibility are handled atomically by
-	 * setclientborderstate().  Do not overwrite the rounded color here. */
 	(void)urgent;
 
 	if (c->shadow) {
@@ -674,7 +629,6 @@ setopacityfocus(const Arg *arg)
 	if (sel->opacity_focus < 0.1)
 		sel->opacity_focus = 0.1f;
 
-	/* Change opacity from current client */
 	sel->opacity = sel->opacity_focus;
 
 	wlr_scene_node_for_each_buffer(&sel->scene_surface->node, scenebuffersetopacity, sel);

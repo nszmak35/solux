@@ -22,7 +22,6 @@ assignkeymap(struct wlr_keyboard *keyboard) {
 
 	wlr_keyboard_set_keymap(keyboard, keymap);
 
-	/* Restore selected layout group after rebuilding keymap */
 	if (keyboard->xkb_state && current_kblayout < xkb_keymap_num_layouts(keyboard->keymap))
 		xkb_state_update_mask(keyboard->xkb_state,
 			keyboard->modifiers.depressed,
@@ -101,17 +100,10 @@ reload_runtime_keymap(void)
 	if (group >= xkb_keymap_num_layouts(keymap))
 		group = 0;
 
-	/*
-	 * Preserve only the ordinary modifier bits.  Do NOT copy the old XKB
-	 * state object and do NOT use the old keymap anywhere.
-	 */
 	depressed = keyboard->modifiers.depressed;
 	latched = keyboard->modifiers.latched;
 	locked = keyboard->modifiers.locked;
 
-	/*
-	 * 1. Install the new keymap on the synthetic/group keyboard.
-	 */
 	wlr_keyboard_set_keymap(keyboard, keymap);
 
 	
@@ -142,9 +134,6 @@ reload_runtime_keymap(void)
 			0);
 	}
 
-	/*
-	 * 4. The group keyboard is the keyboard exposed by the seat.
-	 */
 	wlr_seat_set_keyboard(seat, keyboard);
 	wlr_seat_keyboard_notify_modifiers(seat, &keyboard->modifiers);
 
@@ -159,10 +148,8 @@ reload_runtime_keymap(void)
 void
 createkeyboard(struct wlr_keyboard *keyboard)
 {
-	/* Set the keymap to match the group keymap */
 	wlr_keyboard_set_keymap(keyboard, kb_group->wlr_group->keyboard.keymap);
 
-	/* Add the new keyboard to the group */
 	wlr_keyboard_group_add_keyboard(kb_group->wlr_group, keyboard);
 
 	kblayout(kb_group);
@@ -180,7 +167,6 @@ createkeyboardgroup(void)
 
 	wlr_keyboard_set_repeat_info(&group->wlr_group->keyboard, repeat_rate, repeat_delay);
 
-	/* Set up listeners for keyboard events */
 	LISTEN(&group->wlr_group->keyboard.events.key, &group->key, keypress);
 	LISTEN(&group->wlr_group->keyboard.events.modifiers, &group->modifiers, keypressmod);
 
@@ -284,8 +270,6 @@ kblayout(KeyboardGroup *kb)
 	if (!kb || !kb->wlr_group || !kb->wlr_group->keyboard.keymap)
 		return;
 
-	/* Always use XKB's effective group. current_kblayout is only the group
-	 * selected by dwl itself; Alt+Shift/Win+Space can change XKB directly. */
 	idx = kb->wlr_group->keyboard.modifiers.group;
 	if (idx >= xkb_keymap_num_layouts(kb->wlr_group->keyboard.keymap))
 		idx = 0;
@@ -294,7 +278,6 @@ kblayout(KeyboardGroup *kb)
 	layout_name = xkb_keymap_layout_get_name(
 		kb->wlr_group->keyboard.keymap, idx);
 
-	/* Publish atomically so soluxctl never reads a truncated/empty file. */
 	if (*kblayout_file &&
 		snprintf(tmp, sizeof(tmp), "%s.tmp", kblayout_file) < (int)sizeof(tmp) &&
 		(f = fopen(tmp, "w"))) {
@@ -368,10 +351,6 @@ keypress(struct wl_listener *listener, void *data)
 						break;
 					}
 				}
-				/* A shifted number key produces !, @, etc. XKB bindings
-				 * commonly use the physical/base keysym (1, 2, ...).
-				 * Keep SHIFT in the modifier comparison, but also accept
-				 * the unshifted keysym so MODKEY|SHIFT,1 works. */
 				if (!match && (mods_pressed & WLR_MODIFIER_SHIFT)) {
 					for (int s = 0; s < nbase_syms; s++) {
 						if (base_syms[s] == keys[i].keysym) {
@@ -388,7 +367,7 @@ keypress(struct wl_listener *listener, void *data)
 				if (match && CLEANMASK(want) == CLEANMASK(mods_pressed) && keys[i].func) {
 					keys[i].func(&keys[i].arg);
 					handled = 1;
-					break; /* one physical key combination = one action */
+					break;
 				}
 			}
 		}
@@ -408,17 +387,12 @@ keypress(struct wl_listener *listener, void *data)
 void
 keypressmod(struct wl_listener *listener, void *data)
 {
-	/* This event is raised when a modifier key, such as shift or alt, is
-	 * pressed. We simply communicate this to the client. */
 	KeyboardGroup *group = wl_container_of(listener, group, modifiers);
 
 	wlr_seat_set_keyboard(seat, &group->wlr_group->keyboard);
-	/* Send modifiers to the client. */
 	wlr_seat_keyboard_notify_modifiers(seat,
 			&group->wlr_group->keyboard.modifiers);
 
-	/* XKB may update the effective group after this listener. Defer the
-	 * read until the current event has completed. */
 	wl_event_loop_add_idle(event_loop, kblayout_idle, group);
 }
 
@@ -450,13 +424,10 @@ void
 virtualkeyboard(struct wl_listener *listener, void *data)
 {
 	struct wlr_virtual_keyboard_v1 *kb = data;
-	/* virtual keyboards shouldn't share keyboard group */
 	KeyboardGroup *group = createkeyboardgroup();
-	/* Set the keymap to match the group keymap */
 	wlr_keyboard_set_keymap(&kb->keyboard, group->wlr_group->keyboard.keymap);
 	LISTEN(&kb->keyboard.base.events.destroy, &group->destroy, destroykeyboardgroup);
 
-	/* Add the new keyboard to the group */
 	wlr_keyboard_group_add_keyboard(group->wlr_group, &kb->keyboard);
 }
 

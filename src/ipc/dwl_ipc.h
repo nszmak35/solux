@@ -21,7 +21,6 @@ dwl_ipc_manager_bind(struct wl_client *client, void *data, uint32_t version, uin
 void
 dwl_ipc_manager_destroy(struct wl_resource *resource)
 {
-	/* No state to destroy */
 }
 
 void
@@ -176,9 +175,6 @@ dwl_ipc_output_set_tags(struct wl_client *client, struct wl_resource *resource, 
 	if (!ipc_output || !(monitor = ipc_output->mon) || !newtags)
 		return;
 
-	/* Route Waybar/dwl IPC through the same state transition as the normal
-	 * view() command. This guarantees the tag animation is prepared before
-	 * visibility is recalculated. */
 	if (!toggle_tagset && newtags == monitor->tagset[monitor->seltags])
 		return;
 

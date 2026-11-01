@@ -15,7 +15,7 @@ typedef struct DnxEntry {
     const char *value;
     const char **items;
     size_t count;
-    int source; /* 0 = default, 1 = user */
+    int source;
 } DnxEntry;
 
 typedef int (*DnxEntryCallback)(const DnxEntry *entry, void *userdata);
@@ -23,7 +23,6 @@ typedef int (*DnxEntryCallback)(const DnxEntry *entry, void *userdata);
 int dnx_foreach_ff(const char *default_path, const char *user_path,
                    DnxEntryCallback callback, void *userdata);
 
-/* Validate Python configuration files without applying any configuration. */
 int dnx_validate_ff(const char *default_path, const char *user_path);
 
 #endif

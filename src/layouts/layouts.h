@@ -73,9 +73,6 @@ solux_dwindle_remove_leaf(DwindleNode **rootp, Client *c)
 	free(parent);
 }
 
-/* Insert newc by bisecting the focused/anchor leaf. The split orientation is
- * deliberately NOT decided here. Swindle decides it from the resulting
- * container's box in recalc(), which is what gives Dwindle its spiral. */
 static void
 solux_dwindle_insert(DwindleNode **rootp, Client *newc, Client *focused)
 {
@@ -122,9 +119,6 @@ solux_dwindle_insert(DwindleNode **rootp, Client *newc, Client *focused)
 	}
 }
 
-/* With dwindle_mouse_client enabled, use the tiled client directly under the
- * pointer as the insertion anchor. This is the only mouse-dependent part;
- * the actual Dwindle geometry remains exactly the Swindle recursive model. */
 static Client *
 solux_dwindle_mouse_client(Monitor *m)
 {
@@ -150,8 +144,6 @@ solux_dwindle_recalc(DwindleNode *n, int gap)
 		return;
 	}
 
-	/* This is the key Swindle behavior: every internal node chooses its
-	 * orientation from the shape of its own current box. */
 	n->split_top = (n->box.height > n->box.width);
 
 	if (!n->split_top) {
@@ -191,7 +183,6 @@ solux_dwindle_tree_sync(Monitor *m)
 	tag = solux_pertag_index(m, m->pertag->curtag);
 	rootp = &m->pertag->dwindle_roots[tag];
 
-	/* Prune clients that disappeared from this tiled tag. */
 	for (;;) {
 		Client *gone = NULL;
 		DwindleNode *stack[256];
@@ -203,11 +194,6 @@ solux_dwindle_tree_sync(Monitor *m)
 		while (sp && !gone) {
 			DwindleNode *n = stack[--sp];
 			if (!n->is_node) {
-				/* Keep fullscreen clients in the Dwindle tree.  Fullscreen is
-				 * a temporary presentation state, not a removal from the
-				 * layout.  If we prune the leaf here, leaving fullscreen makes
-				 * the client get inserted again at the end of the tree and it
-				 * loses its previous position. */
 				Client *tc = n->client;
 				if (!tc || tc->mon != m || !VISIBLEON(tc, m) || tc->isfloating ||
 				    client_is_unmanaged(tc) ||
@@ -226,11 +212,6 @@ solux_dwindle_tree_sync(Monitor *m)
 		solux_dwindle_remove_leaf(rootp, gone);
 	}
 
-	/* Exactly like Swindle: start from the focused client. If mouse mode is
-	 * enabled, the client under the pointer is used as the first anchor.
-	 * Every subsequently inserted client becomes the next anchor, so a burst
-	 * of maps still forms one recursive Dwindle tree rather than repeated
-	 * splits of the same window. */
 	focused = m->pertag->focused[tag];
 	if (!focused || !solux_dwindle_visible_tiled(focused, m) ||
 	    !(focused->tags & m->tagset[m->seltags]) || !solux_dwindle_leaf(*rootp, focused))
@@ -296,11 +277,6 @@ solux_dwindle_tree_arrange(Monitor *m)
 	};
 
 	if (m->pertag->dwindle_roots[tag]) {
-		/* Dwindle has no separate master stack, but mfact still controls
-		 * the first/root split.  The old tree always used 0.5 here, which
-		 * made setmfact appear to do nothing while mouse-client Dwindle
-		 * was active.  Nested splits remain the normal 50/50 Dwindle
-		 * splits. */
 		DwindleNode *root = m->pertag->dwindle_roots[tag];
 		if (root->is_node)
 			root->split_ratio = 2.0f * m->mfact;

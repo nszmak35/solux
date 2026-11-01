@@ -1,26 +1,14 @@
-/*
- * Solux normal floating/canvas helpers.
- *
- * All Float-canvas specific fixes live here so the compositor's normal
- * layout/animation code does not have to know about the camera's coordinate
- * system.  The important rule is: Client::geom is always WORLD geometry;
- * scene nodes/buffers are the SCREEN representation of that geometry.
- */
+/* Float-canvas specific helpers, kept out of the normal layout and animation code. */
 #ifndef SOLUX_NORMALFLOAT_NFLOAT_H
 #define SOLUX_NORMALFLOAT_NFLOAT_H
 
 static Client *nfloat_spawn_pending;
 
-/* Shadow node created by the last nfloat_snapshot() call (NULL if none). */
 static struct wlr_scene_shadow *nfloat_snap_shadow;
 
 static bool
 nfloat_spawn_focus_blocked(Client *c)
 {
-	/* During the initial map sequence setmon()/focusclient() may briefly
-	 * refocus the old client.  That must not move the canvas camera: the new
-	 * Float is deliberately spawned at the camera position that was visible
-	 * before mapping. */
 	return nfloat_spawn_pending && c != nfloat_spawn_pending;
 }
 
@@ -43,10 +31,6 @@ nfloat_capture_spawn_canvas(Client *c)
 
 	nfloat_spawn_pending = c;
 
-	/* canvas_x/y are the camera position that is actually visible NOW.
-	 * Do not use canvas_target_x/y: when animations are enabled the target can
-	 * belong to the previously focused client while the user is looking at an
-	 * intermediate camera position. */
 	c->spawn_canvas_mon = m;
 	c->spawn_canvas_x = m->canvas_x;
 	c->spawn_canvas_y = m->canvas_y;
@@ -71,16 +55,9 @@ nfloat_place_spawn_canvas(Client *c, Client *parent)
 		y = m->m.y + m->m.height / 2.0;
 	}
 
-	/* The client is created at the exact point currently visible through the
-	 * camera, not at the geometry left by the previous client. */
 	c->geom.x = (int)lround(x - c->geom.width / 2.0);
 	c->geom.y = (int)lround(y - c->geom.height / 2.0);
 
-	/* mapnotify initializes animation.current/target before this spawn point is
-	 * known.  If there is no OPEN animation, keep the animation state at the
-	 * actual spawn geometry; otherwise the first MOVE frame can begin at the
-	 * old focused window's geometry.  OPEN itself replaces these values with
-	 * its own initial geometry, so leave pending OPEN untouched. */
 	if (!c->is_pending_open_animation)
 		c->animation.initial = c->animation.current = c->animation.target = c->geom;
 }
@@ -99,17 +76,10 @@ nfloat_finish_spawn_canvas(Client *c)
 		return;
 	}
 
-	/* Re-apply the captured camera point at the last possible moment.  This
-	 * prevents any focus/arrange callback between place_spawn and here from
-	 * replacing the requested Float spawn geometry with the previous focused
-	 * client's geometry. */
 	if (c->has_spawn_canvas && c->spawn_canvas_mon == m && !c->isfullscreen) {
 		c->geom.x = (int)lround(c->spawn_canvas_x - c->geom.width / 2.0);
 		c->geom.y = (int)lround(c->spawn_canvas_y - c->geom.height / 2.0);
 		if (c->animation.running && c->animation.action == SOLUX_ANIM_OPEN) {
-			/* XWayland starts OPEN from mapnotify, before this runs, so
-			 * is_pending_open_animation is already false.  Keep the running
-			 * OPEN origin and only refresh its final target. */
 			c->animation.target = c->geom;
 		} else if (!c->is_pending_open_animation) {
 			c->animation.initial = c->animation.current = c->animation.target = c->geom;
@@ -120,37 +90,26 @@ nfloat_finish_spawn_canvas(Client *c)
 	y = c->geom.y + c->geom.height / 2.0;
 	zoom = m->canvas_target_zoom > 0.01 ? m->canvas_target_zoom : 1.0;
 
-	/* Keep the camera exactly at the captured spawn point; the integer window
-	 * center can differ from it by 0.5px. */
 	if (c->has_spawn_canvas && c->spawn_canvas_mon == m && !c->isfullscreen &&
 		(c->spawn_canvas_x != 0.0 || c->spawn_canvas_y != 0.0)) {
 		x = c->spawn_canvas_x;
 		y = c->spawn_canvas_y;
 	}
 
-	/* With animations disabled, set both the current and target camera at once.
-	 * This is the part that prevents Rofi/GTK/foot/etc. from inheriting the
-	 * previous focused client's camera position. */
 	if (!animations) {
 		m->canvas_x = m->canvas_target_x = x;
 		m->canvas_y = m->canvas_target_y = y;
 		m->canvas_zoom = m->canvas_target_zoom = zoom;
 		m->canvas_animating = false;
 		solux_canvas_apply(m);
-		/* Do not synthesize a pointer motion here.  The physical cursor has not
-		 * moved, and forcing a pointer-enter/motion update during spawn is what
-		 * makes client-side cursors jump even when the canvas was not zoomed. */
 		nfloat_spawn_pending = NULL;
 		c->has_spawn_canvas = false;
 		c->spawn_canvas_mon = NULL;
 		return;
 	}
 
-	/* Animated mode follows the same visible camera point, without inventing a
-	 * second spawn location. */
 	if (fabs(m->canvas_x - x) < 0.001 && fabs(m->canvas_y - y) < 0.001 &&
 		fabs(m->canvas_zoom - zoom) < 0.001) {
-		/* Camera is already there: do not start an empty animation. */
 		m->canvas_target_x = x;
 		m->canvas_target_y = y;
 		m->canvas_target_zoom = zoom;
@@ -163,36 +122,14 @@ nfloat_finish_spawn_canvas(Client *c)
 	c->spawn_canvas_mon = NULL;
 }
 
-/*
- * Canvas buffer transform.
- *
- * Every buffer of the toplevel (root surface and real subsurfaces: foot
- * scrollbars, Firefox/GTK/Qt content areas, ...) is placed by ONE rule so the
- * whole tree always scales as a single rigid picture:
- *
- *   - The visible part of a surface is its rectangle intersected with the
- *     window clip (the xdg geometry, exactly what resize() hands to wlroots).
- *     Anything outside it (CSD shadows, subsurfaces that overhang while the
- *     client is still catching up with a resize) is cropped, never stretched.
- *   - The clip origin maps to the window's inner origin and one scale factor
- *     (screen px per surface px) is used on both axes of every buffer.
- *   - Buffer positions are computed as absolute positions inside the window's
- *     surface tree and corrected by the REAL positions of the parent nodes, so
- *     they do not depend on how wlroots happened to place the nodes (xdg
- *     geometry offset, subsurface offsets, clip) and cannot be applied twice.
- *
- * XDG popups are not part of this pass; they are scaled with the window by
- * nfloat_canvas_popups() below.
- */
 typedef struct {
 	Client *client;
-	struct wlr_box clip;   /* visible window area, root-surface coordinates */
+	struct wlr_box clip;
 	double zoom;
-	double scale_x;        /* screen px per surface px */
+	double scale_x;
 	double scale_y;
 } NFloatCanvasData;
 
-/* Position of `surface` inside `root` (sum of the subsurface offsets). */
 static bool
 nfloat_surface_root_offset(struct wlr_surface *surface,
 	struct wlr_surface *root, int *ox, int *oy)
@@ -215,8 +152,6 @@ nfloat_surface_root_offset(struct wlr_surface *surface,
 	return true;
 }
 
-/* Sum of the positions of all ancestors of `node` below `top` (top itself is
- * not included).  Fails if `top` is not an ancestor. */
 static bool
 nfloat_node_offset_below(struct wlr_scene_node *node,
 	struct wlr_scene_node *top, int *x, int *y)
@@ -241,9 +176,6 @@ nfloat_node_offset_below(struct wlr_scene_node *node,
 	return true;
 }
 
-/* The clip the client's surface tree is cropped to.  `world` is the geometry
- * currently shown (animation frame or final geometry).  A running OPEN
- * animation reveals the window through a growing clip, like the normal path. */
 static struct wlr_box
 nfloat_canvas_clip(Client *c, const struct wlr_box *world)
 {
@@ -281,11 +213,9 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 	if (!surface || surface->current.width <= 0 || surface->current.height <= 0)
 		return;
 
-	/* Popups are not part of the toplevel's canvas geometry. */
 	if (wlr_xdg_popup_try_from_wlr_surface(surface) != NULL)
 		return;
 
-	/* Subsurfaces of another root (for example popups) are not part of this toplevel. */
 	if (wlr_surface_get_root_surface(surface) != client_surface(c))
 		return;
 
@@ -295,7 +225,6 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 
 	R = (struct wlr_box){ ox, oy, surface->current.width, surface->current.height };
 	if (wlr_box_intersection(&I, &R, &d->clip)) {
-		/* Round the edges (not the sizes) so neighbouring buffers never gap or overlap. */
 		x0 = (int)lround((double)(I.x - d->clip.x) * d->scale_x);
 		y0 = (int)lround((double)(I.y - d->clip.y) * d->scale_y);
 		x1 = (int)lround((double)(I.x + I.width - d->clip.x) * d->scale_x);
@@ -303,8 +232,6 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 		dw = MAX(1, x1 - x0);
 		dh = MAX(1, y1 - y0);
 
-		/* Crop the source to the visible part.  Rotated buffers keep the
-		 * source box wlroots gave them. */
 		if (buffer->transform == WL_OUTPUT_TRANSFORM_NORMAL) {
 			wlr_surface_get_buffer_source_box(surface, &src);
 			if ((src.width <= 0 || src.height <= 0) && buffer->buffer)
@@ -320,7 +247,6 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 			}
 		}
 	} else {
-		/* Completely outside the window area: nothing of it may show. */
 		x0 = y0 = -1;
 		dw = dh = 1;
 	}
@@ -330,7 +256,6 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 
 	update_buffer_corner_radius(c, buffer);
 	if (scenefx_corner_radius > 0 && fabs(d->zoom - 1.0) > 1e-6) {
-		/* The client's corners must follow the (zoomed) border rings. */
 		int radius = scenefx_corner_radius;
 
 		if ((scenefx_corner_radius_only_floating && !c->isfloating) || c->isfullscreen)
@@ -340,29 +265,14 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 	}
 }
 
-/*
- * XDG popups (tooltips, menus) are children of c->scene, which sits at the
- * window's screen position, but wlroots keeps their offset in unscaled
- * surface units.  On the zoomed canvas a popup is part of the window it
- * belongs to, so it is scaled exactly like the window: its offset from the
- * parent and the size of its buffers both follow the zoom.  (Leaving the
- * popup at full size made a context menu of a zoomed-out window look huge and
- * unrelated to it.)  Nested popups (sub-menus) follow their parent popup.
- *
- * wlroots rewrites the node position on popup commits, so the last unscaled
- * value is remembered per popup to tell its changes apart from our own.
- * Slots are only compared by pointer, never dereferenced.  It also resets the
- * buffer size on every surface commit; the canvas re-applies the scale each
- * frame before the output is rendered.
- */
 #define NFLOAT_POPUP_SLOTS 64
 #define NFLOAT_POPUP_DEPTH 8
 typedef struct {
 	struct wlr_scene_tree *tree;
-	int ux, uy;   /* position as wlroots set it (unscaled) */
-	int wx, wy;   /* position we wrote last */
+	int ux, uy;
+	int wx, wy;
 	bool applied;
-	bool scaled;  /* the buffers of this popup carry a canvas scale */
+	bool scaled;
 } NFloatPopupSlot;
 
 typedef struct {
@@ -391,10 +301,6 @@ nfloat_popup_slot(struct wlr_scene_tree *tree)
 	return slot;
 }
 
-/* Scale the buffers of one popup surface tree.  The popup's tree origin is the
- * origin of its window geometry; every buffer is placed at its own offset from
- * that origin multiplied by the zoom, corrected by the real positions of the
- * nodes in between (the same approach as nfloat_canvas_buffer_apply). */
 static void
 nfloat_popup_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
 {
@@ -416,7 +322,6 @@ nfloat_popup_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void 
 	if (!surface || !root || surface->current.width <= 0 ||
 		surface->current.height <= 0)
 		return;
-	/* Only this popup's own surfaces; nested popups are handled on their own. */
 	if (wlr_surface_get_root_surface(surface) != root)
 		return;
 	if (!nfloat_surface_root_offset(surface, root, &ox, &oy) ||
@@ -449,7 +354,6 @@ nfloat_popup_apply(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent,
 	if (!popup || !popup->base || !popup->base->surface || depth > NFLOAT_POPUP_DEPTH)
 		return;
 	tree = popup->base->surface->data;
-	/* Only popups already attached to the tree they belong to. */
 	if (!tree || tree->node.parent != parent)
 		return;
 
@@ -458,7 +362,6 @@ nfloat_popup_apply(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent,
 		slot->ux = tree->node.x;
 		slot->uy = tree->node.y;
 	}
-	/* shift keeps the normal, unzoomed placement exactly as is. */
 	nx = (int)lround(slot->ux * scale_x) + shift_x;
 	ny = (int)lround(slot->uy * scale_y) + shift_y;
 	wlr_scene_node_set_position(&tree->node, nx, ny);
@@ -466,7 +369,6 @@ nfloat_popup_apply(struct wlr_xdg_popup *popup, struct wlr_scene_tree *parent,
 	slot->wy = ny;
 	slot->applied = true;
 
-	/* At 1:1 nothing has to be touched unless a scale has to be taken back. */
 	unit = fabs(scale_x - 1.0) < 1e-6 && fabs(scale_y - 1.0) < 1e-6;
 	if (!unit || slot->scaled) {
 		bd.popup = popup;
@@ -513,12 +415,6 @@ nfloat_apply_canvas_client(Client *c, struct wlr_box visual, double zoom)
 	d.client = c;
 	d.zoom = zoom;
 	d.clip = nfloat_canvas_clip(c, &world);
-	/* Scale what the client really shows right now (its committed geometry),
-	 * not the geometry we merely asked for.  While the client is still catching
-	 * up with a resize/animation its content then always fills the animated
-	 * rectangle instead of leaving the desktop visible next to the border.
-	 * Once the client is in sync both are identical.  The OPEN animation keeps
-	 * its growing reveal clip. */
 	if (!(c->animation.running && c->animation.action == SOLUX_ANIM_OPEN)) {
 		struct wlr_box actual;
 
@@ -530,7 +426,6 @@ nfloat_apply_canvas_client(Client *c, struct wlr_box visual, double zoom)
 	}
 	d.scale_x = (double)MAX(1, visual.width - 2 * bwz) / (double)MAX(1, d.clip.width);
 	d.scale_y = (double)MAX(1, visual.height - 2 * bwz) / (double)MAX(1, d.clip.height);
-	/* Remembered so pointer coordinates use exactly what was applied. */
 	c->canvas_scale_x = d.scale_x;
 	c->canvas_scale_y = d.scale_y;
 
@@ -561,8 +456,6 @@ nfloat_restore_canvas_client(Client *c)
 		nfloat_canvas_buffer_apply, &d);
 	nfloat_canvas_popups(c, 1.0, 1.0, (int)c->bw);
 }
-
-/* --- Close snapshot ----------------------------------------------------- */
 
 static bool
 nfloat_snapshot_node(Client *c, struct wlr_scene_node *node,
@@ -599,8 +492,6 @@ nfloat_snapshot_node(Client *c, struct wlr_scene_node *node,
 		if (!src || !surface)
 			break;
 
-		/* The snapshot holds the toplevel root and its own subsurfaces (Firefox/Qt draw
-		 * into subsurfaces); popups and foreign surfaces stay out. */
 		if (wlr_xdg_popup_try_from_wlr_surface(surface) != NULL)
 			break;
 		if (surface != client_surface(c) &&
@@ -665,8 +556,6 @@ nfloat_snapshot_node(Client *c, struct wlr_scene_node *node,
 	}
 	case WLR_SCENE_NODE_RECT:
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:
-		/* Decorations/blur are deliberately regenerated by the compositor; a
-		 * close snapshot must contain client pixels only. */
 		break;
 	}
 
@@ -709,8 +598,6 @@ nfloat_close_snapshot(Client *c)
 		solux_animation_is(animation_type_close, "none"))
 		return;
 
-	/* Freeze the close animation in SCREEN space.  Canvas movement after the
-	 * unmap therefore cannot drag the closing image with the camera. */
 	if (solux_canvas_active(c->mon)) {
 		world = c->animation.running ? c->animation.current : c->geom;
 		if (world.width <= 0 || world.height <= 0)
@@ -788,4 +675,4 @@ nfloat_close_snapshot(Client *c)
 	solux_animation_schedule(f->mon);
 }
 
-#endif /* SOLUX_NORMALFLOAT_NFLOAT_H */
+#endif

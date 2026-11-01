@@ -36,7 +36,6 @@ arrangelayers(Monitor *m)
 		return;
 
 
-	/* Arrange exclusive surfaces from top->bottom */
 	for (i = 3; i >= 0; i--)
 		arrangelayer(m, &m->layers[i], &usable_area, 1);
 
@@ -45,16 +44,13 @@ arrangelayers(Monitor *m)
 		arrange(m);
 	}
 
-	/* Arrange non-exclusive surfaces from top->bottom */
 	for (i = 3; i >= 0; i--)
 		arrangelayer(m, &m->layers[i], &usable_area, 0);
 
-	/* Find topmost keyboard interactive layer, if such a layer exists */
 	for (i = 0; i < (int)LENGTH(layers_above_shell); i++) {
 		wl_list_for_each_reverse(l, &m->layers[layers_above_shell[i]], link) {
 			if (locked || !l->layer_surface->current.keyboard_interactive || !l->mapped)
 				continue;
-			/* Deactivate the focused client. */
 			focusclient(NULL, 0);
 			exclusive_focus = l;
 			client_notify_enter(l->layer_surface->surface, wlr_seat_get_keyboard(seat));
@@ -74,8 +70,6 @@ commitlayersurfacenotify(struct wl_listener *listener, void *data)
 	if (l->layer_surface->initial_commit) {
 		client_set_scale(layer_surface->surface, l->mon->wlr_output->scale);
 
-		/* Temporarily set the layer's current state to pending
-		 * so that we can easily arrange it */
 		old_state = l->layer_surface->current;
 		l->layer_surface->current = l->layer_surface->pending;
 		arrangelayers(l->mon);
@@ -150,8 +144,6 @@ unmaplayersurfacenotify(struct wl_listener *listener, void *data)
 {
 	LayerSurface *l = wl_container_of(listener, l, unmap);
 
-	/* Snapshot before disabling/destroying the live layer so close animation
-	 * can continue independently of the Wayland surface. */
 	l->mapped = 0;
 	wlr_scene_node_set_enabled(&l->scene->node, 0);
 	if (l == exclusive_focus)

@@ -861,7 +861,6 @@ static void set_workspace(const char *name)
     if (!m || !m->ipc_output)
         die("no active monitor");
 
-    /* Select exactly this tag/workspace on the active monitor. */
     zdwl_ipc_output_v2_set_tags(m->ipc_output, 1u << index, 0);
 
     if (wl_display_flush(i.display) < 0 && errno != EAGAIN)
@@ -905,7 +904,6 @@ static void watch_ipc(enum mode mode, const char *workspace)
 
     fd = wl_display_get_fd(i.display);
 
-    /* Initial snapshot. */
     s.dirty = 0;
     wl_display_roundtrip(i.display);
     emit_mode(&s);

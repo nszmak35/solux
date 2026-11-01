@@ -8,7 +8,6 @@ activatex11(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, activate);
 
-	/* Only "managed" windows can be activated */
 	if (!client_is_unmanaged(c))
 		wlr_xwayland_surface_activate(c->surface.xwayland, 1);
 }
@@ -18,10 +17,6 @@ associatex11(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, associate);
 
-	/* Same as XDG clients (commitnotify initial commit): capture the camera
-	 * point that is visible now, before map/applyrules()/setmon() can refocus
-	 * another client and move the canvas.  Without this XWayland windows have
-	 * no spawn point and fall back to a fixed position. */
 	if (!client_is_unmanaged(c))
 		nfloat_capture_spawn_canvas(c);
 
@@ -46,7 +41,6 @@ configurex11(struct wl_listener *listener, void *data)
 		return;
 	}
 	if (!c->mon) {
-		/* No monitor to arrange on (e.g. all outputs unplugged). */
 		wlr_xwayland_surface_configure(c->surface.xwayland,
 				event->x, event->y, event->width, event->height);
 		return;
@@ -56,7 +50,6 @@ configurex11(struct wl_listener *listener, void *data)
 				.y = event->y - c->bw, .width = event->width + c->bw * 2,
 				.height = event->height + c->bw * 2};
 
-		/* Canvas: keep the world position, take only the size. */
 		if (solux_canvas_active(c->mon) && !c->isfullscreen) {
 			want.x = c->geom.x;
 			want.y = c->geom.y;
@@ -73,13 +66,9 @@ createnotifyx11(struct wl_listener *listener, void *data)
 	struct wlr_xwayland_surface *xsurface = data;
 	Client *c;
 
-	/* Allocate a Client for this surface */
 	c = xsurface->data = ecalloc(1, sizeof(*c));
 	c->surface.xwayland = xsurface;
 	c->type = X11;
-	/* The XWayland surface is not associated yet here, so client_surface(c)
-	 * is NULL.  Never call client_is_unmanaged() before associatex11().
-	 * This was the direct cause of the XWayland startup SIGSEGV. */
 	c->bw = borderpx;
 	c->bws = borderspx;
 	c->bwe = borderepx;
@@ -91,7 +80,6 @@ createnotifyx11(struct wl_listener *listener, void *data)
 	c->opacity = c->opacity_unfocus;
 	c->corner_radius = scenefx_corner_radius;
 
-	/* Listen to the various events it can emit */
 	LISTEN(&xsurface->events.associate, &c->associate, associatex11);
 	LISTEN(&xsurface->events.destroy, &c->destroy, destroynotify);
 	LISTEN(&xsurface->events.dissociate, &c->dissociate, dissociatex11);

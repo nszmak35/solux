@@ -26,8 +26,6 @@ buttonpress(struct wl_listener *listener, void *data)
 		if (locked)
 			break;
 
-		/* Canvas panning is configured through the normal Python buttons table.
-		 * Handle this special drag action before focusing/raising the client. */
 		keyboard = wlr_seat_get_keyboard(seat);
 		mods = keyboard ? CLEANMASK(wlr_keyboard_get_modifiers(keyboard)) : 0;
 		for (b = buttons; b < buttons + buttons_len; b++) {
@@ -41,7 +39,6 @@ buttonpress(struct wl_listener *listener, void *data)
 			}
 		}
 
-		/* Change focus if the button was pressed over a client. */
 		if (click == ClkClient && (!client_is_unmanaged(c) || client_wants_focus(c)))
 			focusclient(c, 1);
 
@@ -67,18 +64,13 @@ buttonpress(struct wl_listener *listener, void *data)
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			return;
 		}
-		/* If you released any buttons, we exit interactive move/resize mode. */
-		/* TODO: should reset to the pointer focus's current setcursor */
 		if (!locked && cursor_mode != CurNormal && cursor_mode != CurPressed) {
 			const bool was_move = cursor_mode == CurMove;
 
 			wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 			cursor_mode = CurNormal;
-			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
 			if (grabc && selmon && grabc->mon != selmon) {
-				/* Keep the window where it was released and do not let the
-				 * target camera chase it: the drop must not move the view. */
 				solux_canvas_transfer_client(grabc, selmon);
 				solux_focus_restoring = true;
 				setmon(grabc, selmon, 0);
@@ -94,8 +86,6 @@ buttonpress(struct wl_listener *listener, void *data)
 		cursor_mode = CurNormal;
 		break;
 	}
-	/* If the event wasn't handled by the compositor, notify the client with
-	 * pointer focus that a button press has occurred */
 	wlr_seat_pointer_notify_button(seat,
 			event->time_msec, event->button, event->state);
 }
@@ -141,9 +131,6 @@ axisnotify(struct wl_listener *listener, void *data)
 			}
 		}
 
-		/* Prefer an exact click target first. If a scroll binding is declared
-		 * for ClkClient and the pointer is over empty space, allow it as a
-		 * fallback so tag cycling does not stop on an empty tag. */
 		for (b = buttons; b < buttons + buttons_len; b++) {
 			uint32_t want = b->mod;
 
@@ -293,7 +280,6 @@ cursorframe(struct wl_listener *listener, void *data)
 {
 	
 
-	/* Notify the client with pointer focus of the frame event. */
 	wlr_seat_pointer_notify_frame(seat);
 }
 
@@ -314,7 +300,6 @@ cursorwarptohint(void)
 void
 destroydragicon(struct wl_listener *listener, void *data)
 {
-	/* Focus enter isn't sent during drag, so refocus the focused node. */
 	focusclient(focustop(selmon), 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	wl_list_remove(&listener->link);
@@ -338,8 +323,6 @@ destroypointerconstraint(struct wl_listener *listener, void *data)
 void
 inputdevice(struct wl_listener *listener, void *data)
 {
-	/* This event is raised by the backend when a new input device becomes
-	 * available. */
 	struct wlr_input_device *device = data;
 	uint32_t caps;
 
@@ -351,14 +334,9 @@ inputdevice(struct wl_listener *listener, void *data)
 		createpointer(wlr_pointer_from_input_device(device));
 		break;
 	default:
-		/* TODO handle other input device types */
 		break;
 	}
 
-	/* We need to let the wlr_seat know what our capabilities are, which is
-	 * communiciated to the client. In dwl we always have a cursor, even if
-	 * there are no pointer devices, so we always include that capability. */
-	/* TODO do we actually require a cursor? */
 	caps = WL_SEAT_CAPABILITY_POINTER;
 	if (!wl_list_empty(&kb_group->wlr_group->devices))
 		caps |= WL_SEAT_CAPABILITY_KEYBOARD;
@@ -373,7 +351,7 @@ motionabsolute(struct wl_listener *listener, void *data)
 	struct wlr_pointer_motion_absolute_event *event = data;
 	double lx, ly, dx, dy;
 
-	if (!event->time_msec) /* this is 0 with virtual pointers */
+	if (!event->time_msec)
 		wlr_cursor_warp_absolute(cursor, &event->pointer->base, event->x, event->y);
 
 	wlr_cursor_absolute_to_layout_coords(cursor, &event->pointer->base, event->x, event->y, &lx, &ly);
@@ -392,7 +370,6 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	struct wlr_surface *surface = NULL;
 	struct wlr_pointer_constraint_v1 *constraint;
 
-	/* Find the client under the pointer and send the event along. */
 	xytonode(cursor->x, cursor->y, &surface, &c, NULL, &sx, &sy);
 	if (c && surface && solux_canvas_active(c->mon))
 		solux_canvas_surface_coords(c, surface, &sx, &sy);
@@ -402,16 +379,12 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
 		c = w;
 		surface = seat->pointer_state.focused_surface;
-		/* A button is held and the pointer left the surface: keep sending
-		 * coordinates relative to that surface.  On the zoomed canvas the
-		 * window's geom is world space, so map through the camera instead. */
 		if (l || !solux_canvas_surface_local(w, surface, cursor->x, cursor->y, &sx, &sy)) {
 			sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
 			sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
 		}
 	}
 
-	/* time is 0 in internal calls meant to restore pointer focus. */
 	if (time) {
 		wlr_relative_pointer_manager_v1_send_relative_motion(
 				relative_pointer_mgr, seat, (uint64_t)time * 1000,
@@ -440,16 +413,12 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		wlr_cursor_move(cursor, device, dx, dy);
 		wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
-		/* Update selmon (even while dragging a window) */
 		if (sloppyfocus)
 			selmon = xytomon(cursor->x, cursor->y);
 	}
 
-	/* Update drag icon's position */
 	wlr_scene_node_set_position(&drag_icon->node, (int)round(cursor->x), (int)round(cursor->y));
 
-	/* If we are panning the canvas, update camera coordinates directly so
-	 * the canvas tracks the pointer without accumulating frame lag. */
 	if (cursor_mode == CurCanvasMove && canvas_drag_mon && solux_canvas_active(canvas_drag_mon)) {
 		double z = MAX(0.3, canvas_drag_mon->canvas_zoom);
 		canvas_drag_mon->canvas_x = canvas_drag_mon->canvas_target_x =
@@ -463,7 +432,6 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		return;
 	}
 
-	/* If we are currently grabbing the mouse, handle and return */
 	if (cursor_mode == CurMove) {
 		double wx, wy;
 		solux_inertia_sample(cursor->x, cursor->y);
@@ -479,9 +447,6 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		return;
 	}
 
-	/* If there's no client surface under the cursor, set the cursor image to a
-	 * default. This is what makes the cursor image appear when you move it
-	 * off of a client or over its border. */
 	if (!surface && !seat->drag)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
 
@@ -491,8 +456,6 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 void
 motionrelative(struct wl_listener *listener, void *data)
 {
-	/* This event is forwarded by the cursor when a pointer emits a _relative_
-	 * pointer motion event (i.e. a delta) */
 	struct wlr_pointer_motion_event *event = data;
 	
 
@@ -509,14 +472,10 @@ moveresize(const Arg *arg)
 	if (!grabc || client_is_unmanaged(grabc) || grabc->isfullscreen)
 		return;
 
-	/* Allow moving/resizing in a floating layout, and also allow explicitly
-	 * floating clients inside tile/dwindle. Tiled clients in tile/dwindle
-	 * remain protected. */
 	if (!grabc->mon || grabc->isfullscreen ||
 		(!grabc->isfloating && grabc->mon->lt[grabc->mon->sellt]->arrange))
 		return;
 	setfloating(grabc, 1);
-	/* Keep the grabbed window above overlapping windows throughout the drag. */
 	wlr_scene_node_raise_to_top(&grabc->scene->node);
 	switch (cursor_mode = arg->ui) {
 	case CurMove: {
@@ -551,13 +510,6 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	struct timespec now;
 	bool real_motion = time != 0;
 
-	/* Focus follows the mouse when real pointer motion enters a different
-	 * surface -- or a different client than the last one entered by motion.
-	 * The second test matters because the canvas re-targets pointer focus
-	 * every frame (camera/zoom/animations move windows under a resting
-	 * pointer) without moving keyboard focus; comparing only the surface
-	 * made the next real motion over that window a no-op, so it never got
-	 * focus. */
 	if (sloppyfocus && real_motion && c && !client_is_unmanaged(c) &&
 			(surface != seat->pointer_state.focused_surface ||
 			 c != pointer_hover_client)) {
@@ -569,7 +521,6 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 	if (surface && c && surface != seat->pointer_state.focused_surface)
 		solux_canvas_x11_raise(c);
 
-	/* If surface is NULL, clear pointer focus */
 	if (!surface) {
 		wlr_seat_pointer_notify_clear_focus(seat);
 		return;
@@ -580,9 +531,6 @@ pointerfocus(Client *c, struct wlr_surface *surface, double sx, double sy,
 		time = now.tv_sec * 1000 + now.tv_nsec / 1000000;
 	}
 
-	/* Let the client know that the mouse cursor has entered one
-	 * of its surfaces, and make keyboard focus follow if desired.
-	 * wlroots makes this a no-op if surface is already focused */
 	wlr_seat_pointer_notify_enter(seat, surface, sx, sy);
 	wlr_seat_pointer_notify_motion(seat, time, sx, sy);
 }
@@ -602,11 +550,7 @@ requeststartdrag(struct wl_listener *listener, void *data)
 void
 setcursor(struct wl_listener *listener, void *data)
 {
-	/* This event is raised by the seat when a client provides a cursor image */
 	struct wlr_seat_pointer_request_set_cursor_event *event = data;
-	/* If we're "grabbing" the cursor, don't use the client's image, we will
-	 * restore it after "grabbing" sending a leave event, followed by a enter
-	 * event, which will result in the client requesting set the cursor surface */
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	
@@ -622,9 +566,6 @@ setcursorshape(struct wl_listener *listener, void *data)
 	struct wlr_cursor_shape_manager_v1_request_set_shape_event *event = data;
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
-	/* This can be sent by any client, so we check to make sure this one
-	 * actually has pointer focus first. If so, we can tell the cursor to
-	 * use the provided cursor shape. */
 	if (event->seat_client == seat->pointer_state.focused_client)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr,
 				wlr_cursor_shape_v1_name(event->shape));
@@ -673,7 +614,6 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 			if (!scene_surface) continue;
 			surface = scene_surface->surface;
 		}
-		/* Walk the tree to find a node that knows the client */
 		for (pnode = node; pnode && !c; pnode = &pnode->parent->node)
 			c = pnode->data;
 		if (c && c->type == LayerShell) {
@@ -686,10 +626,6 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 		}
 	}
 
-	/* On the zoomed canvas a window is drawn smaller or bigger than its world
-	 * geometry.  Whatever hangs on it -- borders, shadow, blur -- belongs to the
-	 * window only where the window is drawn: hovering next to it must neither
-	 * focus it (sloppyfocus) nor count as a hit.  Popups are not affected. */
 	if (c && c->mon && c->canvas_visualized && !c->isfullscreen &&
 			solux_canvas_active(c->mon) &&
 			(!surface || wlr_surface_get_root_surface(surface) == client_surface(c))) {

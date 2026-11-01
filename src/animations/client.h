@@ -1,4 +1,4 @@
-/* Client/window animations for Solux. Kept close to mangowc's animation path. */
+/* Client/window animations for Solux, kept close to mangowc's animation path. */
 #ifndef SOLUX_ANIMATION_CLIENT_H
 #define SOLUX_ANIMATION_CLIENT_H
 
@@ -20,9 +20,6 @@ static struct fx_corner_radii solux_animation_corner_location(Client *c, struct 
 		(scenefx_corner_radius_only_floating && !c->isfloating))
 		return corner_radii_none();
 
-	/* Match MangoWC: while a client is animated, only remove the corners
-	 * which are actually touching the output edge.  Do not use {0} here;
-	 * that disables rounding for the entire XWayland/XDG buffer. */
 	if (visual.x + c->corner_radius <= c->mon->m.x) {
 		r.top_left = 0;
 		r.bottom_left = 0;
@@ -50,10 +47,6 @@ static void solux_animation_apply_rect_borders(Client *c, struct wlr_box visual)
 	if (!c || !c->border || !c->borders || !c->bordere)
 		return;
 
-	/* When corner radius is zero the normal rectangular border nodes are used.
-	 * Unlike SceneFX's rounded nodes, these are not part of the buffer scaling
-	 * path, so keep their geometry synchronized with the animated visual box.
-	 * Do not touch c->geom: it remains the layout's real target geometry. */
 	wlr_scene_rect_set_size(c->border[0], MAX(0, visual.width), c->bw);
 	wlr_scene_rect_set_size(c->border[1], MAX(0, visual.width), c->bw);
 	wlr_scene_rect_set_size(c->border[2], c->bw,
@@ -104,10 +97,10 @@ static void solux_animation_apply_rect_borders(Client *c, struct wlr_box visual)
 		MAX(0, visual.height - (int)c->bw + borderepx_negative_offset));
 	wlr_scene_node_set_position(&c->bordere[2]->node,
 		c->bw - c->bwe - borderepx_negative_offset,
-		c->bw - c->bwe - borderepx_negative_offset);
+		c->bw - borderepx_negative_offset);
 	wlr_scene_node_set_position(&c->bordere[3]->node,
 		MAX(0, visual.width - (int)c->bw + borderepx_negative_offset),
-		c->bw - c->bwe - borderepx_negative_offset);
+		c->bw - borderepx_negative_offset);
 }
 
 static void solux_client_apply_open_clip(Client *c, struct wlr_box visual, double linear_progress)
@@ -120,11 +113,6 @@ static void solux_client_apply_open_clip(Client *c, struct wlr_box visual, doubl
 		!client_surface(c)->mapped)
 		return;
 
-	/* This is MangoWC's OPEN path: animate the scene geometry, then clip the
-	 * actual client surface to that intermediate geometry.  In particular, the
-	 * clip is what makes zoom OPEN look like Mango rather than simply resizing
-	 * the Wayland buffer.  Popups/subsurfaces are still handled by the existing
-	 * buffer callback, which deliberately does not resize them. */
 	client_get_geometry(c, &geometry);
 	width = MAX(1, visual.width - 2 * (int)c->bw);
 	height = MAX(1, visual.height - 2 * (int)c->bw);
@@ -186,21 +174,8 @@ static void solux_client_apply_visual(Client *c, struct wlr_box visual, double f
 	atype = solux_client_animation_name(c);
 	opacity = c->opacity;
 
-	/* The scene tree itself is the animated rectangle. Keep the surface at its
-	 * normal border offset. Moving the surface child as well would apply the
-	 * zoom translation twice and is the reason the old implementation could
-	 * make the first open frame appear in the wrong place. */
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 
-	/* Do not clip the entire subsurface tree here.  Chromium and other
-	 * clients can place popups/subsurfaces outside the toplevel bounds.
-	 * Clipping the whole tree makes those surfaces look cut off and can
-	 * produce the asymmetric blur/rounded-corner artifact.  SceneFX applies
-	 * the actual rounded clip to the client buffers themselves. */
-
-	/* During MOVE, including a tiled resize, keep the displayed surface at the
-	 * same intermediate size as the animated scene rectangle.  OPEN is handled
-	 * separately below using MangoWC's clip-based OPEN path. */
 	if (c->animation.action == SOLUX_ANIM_MOVE) {
 		struct wlr_box corner_visual = visual;
 		BufferData bd = {
@@ -223,9 +198,6 @@ static void solux_client_apply_visual(Client *c, struct wlr_box visual, double f
 
 	if (c->animation.action == SOLUX_ANIM_OPEN && animation_fade_in &&
 		strcasecmp(atype, "none")) {
-		/* Mango applies the fade curve to the linear time progress, not to the
-		 * already eased OPEN progress.  Feeding the eased value into the fade
-		 * curve double-eases the animation and makes it look much sharper. */
 		double fp = solux_animation_factor(factor, SOLUX_ANIM_OPAFADEIN);
 		opacity = (float)MIN(c->opacity,
 			fadein_begin_opacity + fp * (1.0 - fadein_begin_opacity));
@@ -234,18 +206,11 @@ static void solux_client_apply_visual(Client *c, struct wlr_box visual, double f
 	wlr_scene_node_for_each_buffer(&c->scene_surface->node,
 			animation_buffer_opacity_apply, &opacity);
 
-	/* With no corner radius, the live rectangular border nodes must follow the
-	 * same intermediate geometry as the animated client. */
 	if (!(scenefx_corner_radius > 0 &&
 		!(scenefx_corner_radius_only_floating && !c->isfloating) &&
 		!c->isfullscreen))
 		solux_animation_apply_rect_borders(c, visual);
 
-	/* Keep SceneFX decorations synchronized with the transient visual geometry,
-	 * without ever changing the layout geometry used by arrange().  MangoWC
-	 * also sizes its blur from the animation geometry; leaving blur at the final
-	 * target size is what creates the one-sided blur/rounded-corner artifact
-	 * while Chromium is entering or being resized. */
 	{
 		struct wlr_box real = c->geom;
 		c->geom = visual;
@@ -278,7 +243,6 @@ static int solux_client_slide_direction(Client *c)
 	if (!c || !c->mon)
 		return SOLUX_ANIM_DOWN;
 
-	/* MangoWC opens a single tiled client from the bottom. */
 	wl_list_for_each(it, &clients, link) {
 		if (it != c && VISIBLEON(it, c->mon) && !it->isfloating && !it->isfullscreen)
 			visible_tiled++;
@@ -335,9 +299,6 @@ static void solux_client_start_open(Client *c)
 	c->animation.time_started = solux_animation_now_ms();
 	c->animation.running = true;
 	c->is_pending_open_animation = false;
-	/* mapnotify deliberately leaves managed clients disabled until arrange().
-	 * Enable the node here as well so the first frame of a newly mapped client
-	 * can never be skipped. */
 	wlr_scene_node_set_enabled(&c->scene->node, true);
 	wlr_scene_node_set_position(&c->scene->node,
 			c->animation.initial.x, c->animation.initial.y);
@@ -385,12 +346,6 @@ static void solux_client_resize(Client *c)
 		solux_client_start_open(c);
 		return;
 	}
-	/* Once an XWayland surface is mapped, configure/arrange notifications can
-	 * immediately follow the map event.  They are geometry updates, not a new
-	 * move animation.  Keep the OPEN animation alive and only update its final
-	 * target until the first appearance has completed.  This mirrors Mango's
-	 * pending-open lifecycle and prevents X11 windows from animating only after
-	 * a later move/configure. */
 	if (c->animation.running && c->animation.action == SOLUX_ANIM_OPEN) {
 		c->animation.target = c->geom;
 		return;
@@ -452,9 +407,6 @@ static void solux_client_animation_next_tick(Client *c)
 		update_client_rounded_borders(c);
 		if (c->shadow)
 			client_refresh_shadow(c);
-		/* Restore the real target buffer geometry/clip/opacity after zoom or
-		 * fade. Otherwise the last animated SceneFX destination can survive until
-		 * the next client commit. */
 		{
 			BufferData bd = {
 				.width = MAX(1, c->geom.width - 2 * (int)c->bw),
@@ -507,9 +459,6 @@ static void solux_client_fadeout_next_tick(SoluxFadeClient *f)
 		solux_animation_set_buffers_opacity(&f->scene->node, (float)op);
 	}
 	if (f->shadow) {
-		/* The snapshot's shadow follows the window: it shrinks with a zoom
-		 * close and fades with it.  Left alone it kept its full size and
-		 * opacity and stuck out around the vanishing window. */
 		double sw = f->initial.width > 0 ? (double)v.width / (double)f->initial.width : 1.0;
 		double sh = f->initial.height > 0 ? (double)v.height / (double)f->initial.height : 1.0;
 		double avg, keep;
