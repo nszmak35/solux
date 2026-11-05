@@ -190,6 +190,44 @@ nfloat_canvas_clip(Client *c, const struct wlr_box *world)
 	return clip;
 }
 
+static bool
+nfloat_buffer_point_accepts_input(struct wlr_scene_buffer *buffer,
+	double *sx, double *sy)
+{
+	struct wlr_scene_surface *ss;
+	struct wlr_surface *surface;
+	struct wlr_fbox full, cur;
+	double lx, ly, tx, ty;
+
+	if (!buffer || !sx || !sy ||
+		!(ss = wlr_scene_surface_try_from_buffer(buffer)) ||
+		!(surface = ss->surface))
+		return false;
+
+	lx = *sx;
+	ly = *sy;
+	if (buffer->dst_width > 0 && buffer->dst_height > 0 &&
+		surface->current.width > 0 && surface->current.height > 0) {
+		tx = lx / (double)buffer->dst_width;
+		ty = ly / (double)buffer->dst_height;
+		cur = buffer->src_box;
+		if (buffer->transform == WL_OUTPUT_TRANSFORM_NORMAL &&
+			!wlr_fbox_empty(&cur)) {
+			wlr_surface_get_buffer_source_box(surface, &full);
+			if (wlr_fbox_empty(&full) && buffer->buffer)
+				full = (struct wlr_fbox){ 0, 0,
+					buffer->buffer->width, buffer->buffer->height };
+			if (!wlr_fbox_empty(&full)) {
+				tx = (cur.x + tx * cur.width - full.x) / full.width;
+				ty = (cur.y + ty * cur.height - full.y) / full.height;
+			}
+		}
+		lx = tx * surface->current.width;
+		ly = ty * surface->current.height;
+	}
+	return wlr_surface_point_accepts_input(surface, lx, ly);
+}
+
 static void
 nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
 {
@@ -253,6 +291,7 @@ nfloat_canvas_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void
 
 	wlr_scene_node_set_position(&buffer->node, x0 - px, y0 - py);
 	wlr_scene_buffer_set_dest_size(buffer, dw, dh);
+	buffer->point_accepts_input = nfloat_buffer_point_accepts_input;
 
 	update_buffer_corner_radius(c, buffer);
 	if (scenefx_corner_radius > 0 && fabs(d->zoom - 1.0) > 1e-6) {
@@ -338,6 +377,7 @@ nfloat_popup_buffer_apply(struct wlr_scene_buffer *buffer, int sx, int sy, void 
 
 	wlr_scene_node_set_position(&buffer->node, x0 - px, y0 - py);
 	wlr_scene_buffer_set_dest_size(buffer, MAX(1, x1 - x0), MAX(1, y1 - y0));
+	buffer->point_accepts_input = nfloat_buffer_point_accepts_input;
 }
 
 static void

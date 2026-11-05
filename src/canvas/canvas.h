@@ -821,6 +821,51 @@ solux_canvas_refresh_pointer(void)
 }
 
 static void
+solux_canvas_sync_surface(Client *c)
+{
+	struct wlr_box world, visual;
+	double zoom;
+
+	if (!c || !c->mon || !c->scene || !c->scene_surface || client_is_unmanaged(c) ||
+		c->isfullscreen || !c->canvas_visualized || !solux_canvas_active(c->mon))
+		return;
+	if (c->mon->taganim_active && c->taganim_role == TAGANIM_OUT)
+		return;
+	world = c->animation.running ? c->animation.current : c->geom;
+	if (world.width <= 0 || world.height <= 0)
+		world = c->geom;
+	visual = solux_canvas_world_to_screen(c->mon, world);
+	zoom = c->mon->canvas_zoom > 0.01 ? c->mon->canvas_zoom : 1.0;
+	nfloat_apply_canvas_client(c, visual, zoom);
+	wlr_scene_node_set_position(&c->scene_surface->node,
+		MAX(0, (int)lround((double)c->bw * zoom)),
+		MAX(0, (int)lround((double)c->bw * zoom)));
+}
+
+/* Make the scene match the zoomed canvas before the pointer is hit-tested: a client
+ * commit resets the scene to unzoomed coordinates until the next frame, which made
+ * hover flicker between wrong and right positions. */
+static void
+solux_canvas_flush_pointer_state(void)
+{
+	Client *c;
+
+	wl_list_for_each(c, &clients, link) {
+		if (!c->mon || !c->scene || !c->scene_surface || c->isfullscreen ||
+				client_is_unmanaged(c) || !solux_canvas_active(c->mon)) {
+			c->canvas_dirty = false;
+			continue;
+		}
+		if (c->canvas_dirty) {
+			c->canvas_dirty = false;
+			solux_canvas_apply_client(c);
+		} else if (c == pointer_hover_client) {
+			solux_canvas_sync_surface(c);
+		}
+	}
+}
+
+static void
 zoomcanvas(const Arg *arg)
 {
 	Monitor *m = selmon;

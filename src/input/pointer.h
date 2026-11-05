@@ -370,21 +370,6 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	struct wlr_surface *surface = NULL;
 	struct wlr_pointer_constraint_v1 *constraint;
 
-	xytonode(cursor->x, cursor->y, &surface, &c, NULL, &sx, &sy);
-	if (c && surface && solux_canvas_active(c->mon))
-		solux_canvas_surface_coords(c, surface, &sx, &sy);
-
-	if (cursor_mode == CurPressed && !seat->drag
-			&& surface != seat->pointer_state.focused_surface
-			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
-		c = w;
-		surface = seat->pointer_state.focused_surface;
-		if (l || !solux_canvas_surface_local(w, surface, cursor->x, cursor->y, &sx, &sy)) {
-			sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
-			sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
-		}
-	}
-
 	if (time) {
 		wlr_relative_pointer_manager_v1_send_relative_motion(
 				relative_pointer_mgr, seat, (uint64_t)time * 1000,
@@ -445,6 +430,22 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		resize(grabc, (struct wlr_box){.x = grabc->geom.x, .y = grabc->geom.y,
 			.width = (int)lround(wx) - grabc->geom.x, .height = (int)lround(wy) - grabc->geom.y}, 1);
 		return;
+	}
+
+	/* Hit-test at the final cursor position (after wlr_cursor_move). */
+	xytonode(cursor->x, cursor->y, &surface, &c, NULL, &sx, &sy);
+	if (c && surface && solux_canvas_active(c->mon))
+		solux_canvas_surface_coords(c, surface, &sx, &sy);
+
+	if (cursor_mode == CurPressed && !seat->drag
+			&& surface != seat->pointer_state.focused_surface
+			&& toplevel_from_wlr_surface(seat->pointer_state.focused_surface, &w, &l) >= 0) {
+		c = w;
+		surface = seat->pointer_state.focused_surface;
+		if (l || !solux_canvas_surface_local(w, surface, cursor->x, cursor->y, &sx, &sy)) {
+			sx = cursor->x - (l ? l->scene->node.x : w->geom.x);
+			sy = cursor->y - (l ? l->scene->node.y : w->geom.y);
+		}
 	}
 
 	if (!surface && !seat->drag)
@@ -603,6 +604,8 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 	Client *c = NULL;
 	LayerSurface *l = NULL;
 	int layer;
+
+	solux_canvas_flush_pointer_state();
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= 0; layer--) {
 		if (!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))

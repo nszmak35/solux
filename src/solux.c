@@ -334,6 +334,7 @@ typedef struct Client {
 	int isnoanimation;
 	int isminimized;
 	bool canvas_visualized;
+	bool canvas_dirty;
 	float canvas_buf_scale;
 	bool inertia;
 	double ivx, ivy;
@@ -679,6 +680,7 @@ static bool solux_canvas_active(Monitor *m);
 static struct wlr_box solux_canvas_world_to_screen(Monitor *m, struct wlr_box world);
 static void solux_canvas_screen_to_world(Monitor *m, double sx, double sy, double *wx, double *wy);
 static void solux_canvas_refresh_pointer(void);
+static void solux_canvas_flush_pointer_state(void);
 static void solux_canvas_start(Monitor *m, double x, double y, double zoomlevel);
 static unsigned int solux_pertag_index(Monitor *m, unsigned int tag);
 static void solux_dwindle_tree_free(DwindleNode *n);
@@ -1485,6 +1487,10 @@ commitnotify(struct wl_listener *listener, void *data)
 			wlr_scene_optimized_blur_mark_dirty(c->mon->blur_layer);
 		}
 	}
+
+	if (c->mon && c->scene && c->scene_surface && client_surface(c)->mapped &&
+			!c->isfullscreen && solux_canvas_active(c->mon))
+		c->canvas_dirty = true;
 
 	if (c->resize && c->resize <= c->surface.xdg->current.configure_serial)
 		c->resize = 0;
