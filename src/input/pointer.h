@@ -428,7 +428,8 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		double wx, wy;
 		solux_canvas_screen_to_world(grabc ? grabc->mon : NULL, cursor->x, cursor->y, &wx, &wy);
 		resize(grabc, (struct wlr_box){.x = grabc->geom.x, .y = grabc->geom.y,
-			.width = (int)lround(wx) - grabc->geom.x, .height = (int)lround(wy) - grabc->geom.y}, 1);
+			.width = (int)lround(resize_start_w + (wx - resize_cwx)),
+			.height = (int)lround(resize_start_h + (wy - resize_cwy))}, 1);
 		return;
 	}
 
@@ -490,14 +491,10 @@ moveresize(const Arg *arg)
 		break;
 	}
 	case CurResize: {
-		double sx, sy;
-		if (solux_canvas_active(grabc->mon)) {
-			struct wlr_box vg = solux_canvas_world_to_screen(grabc->mon, grabc->geom);
-			sx = vg.x + vg.width; sy = vg.y + vg.height;
-		} else {
-			sx = grabc->geom.x + grabc->geom.width; sy = grabc->geom.y + grabc->geom.height;
-		}
-		wlr_cursor_warp_closest(cursor, NULL, sx, sy);
+		/* No cursor jump: the size follows how far the cursor moved since the start. */
+		solux_canvas_screen_to_world(grabc->mon, cursor->x, cursor->y, &resize_cwx, &resize_cwy);
+		resize_start_w = grabc->geom.width;
+		resize_start_h = grabc->geom.height;
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
 		break;
 	}

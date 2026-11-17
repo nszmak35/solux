@@ -326,6 +326,7 @@ typedef struct Client {
 	struct wlr_scene_rect *round_borders;
 	struct wlr_scene_rect *round_bordere;
 	uint32_t resize;
+	int32_t cfg_w, cfg_h; /* last size asked from the client */
 	unsigned int kblayout_idx;
 	SoluxAnimation animation;
 	bool is_pending_open_animation;
@@ -342,6 +343,7 @@ typedef struct Client {
 	uint64_t inertia_ms;
 	double canvas_scale_x;
 	double canvas_scale_y;
+	int canvas_bwz;
 	Monitor *spawn_canvas_mon;
 	double spawn_canvas_x, spawn_canvas_y;
 	bool has_spawn_canvas;
@@ -802,6 +804,7 @@ static unsigned int current_kblayout = 0;
 static unsigned int cursor_mode;
 static Client *grabc;
 static int grabcx, grabcy;
+static double resize_start_w, resize_start_h, resize_cwx, resize_cwy;
 static Monitor *canvas_drag_mon;
 static double canvas_drag_cursor_x, canvas_drag_cursor_y;
 static double canvas_drag_start_x, canvas_drag_start_y;
@@ -1083,6 +1086,7 @@ static bool is_scroller_layout(Monitor *m) { (void)m; return false; }
 #include "config/config_util.h"
 #include "config/config_scalar.h"
 #include "config/config_load.h"
+#include "config/config_watch.h"
 #include "input/keyboard.h"
 #include "input/pointer.h"
 #include "gestures/gestures.h"
@@ -1369,6 +1373,7 @@ cleanup(void)
 	wlr_backend_destroy(backend);
 
 	soluxctl_cleanup();
+	solux_cfgwatch_cleanup();
 	wl_display_destroy(dpy);
 	while (!wl_list_empty(&fadeout_clients)) {
 		SoluxFadeClient *f = wl_container_of(fadeout_clients.next, f, link);
@@ -1444,6 +1449,7 @@ commitnotify(struct wl_listener *listener, void *data)
 		if (c->decoration)
 			requestdecorationmode(&c->set_decoration_mode, c->decoration);
 		wlr_xdg_toplevel_set_size(c->surface.xdg->toplevel, 0, 0);
+		c->cfg_w = c->cfg_h = 0;
 		return;
 	}
 
@@ -1496,6 +1502,42 @@ commitnotify(struct wl_listener *listener, void *data)
 		c->resize = 0;
 }
 
+/* wlroots resets the buffer size of a popup on every commit of that popup (a menu does it on
+ * each hover, a completion list on each typed character). This hook runs after wlroots' own
+ * handler and puts the canvas scale back at once, so the popup is never drawn unscaled. */
+typedef struct {
+	struct wl_listener commit, destroy;
+} PopupHook;
+
+static void
+popup_hook_commit(struct wl_listener *listener, void *data)
+{
+	struct wlr_surface *surface = data;
+	Client *c = NULL;
+	LayerSurface *l = NULL;
+
+	(void)listener;
+	if (toplevel_from_wlr_surface(surface, &c, &l) != XDGShell || !c || !c->scene ||
+			!c->canvas_visualized)
+		return;
+	if (fabs(c->canvas_scale_x - 1.0) < 1e-6 && fabs(c->canvas_scale_y - 1.0) < 1e-6)
+		return;
+	if (c->canvas_scale_x <= 0.001 || c->canvas_scale_y <= 0.001)
+		return;
+	nfloat_canvas_popups(c, c->canvas_scale_x, c->canvas_scale_y, c->canvas_bwz);
+}
+
+static void
+popup_hook_destroy(struct wl_listener *listener, void *data)
+{
+	PopupHook *h = wl_container_of(listener, h, destroy);
+
+	(void)data;
+	wl_list_remove(&h->commit.link);
+	wl_list_remove(&h->destroy.link);
+	free(h);
+}
+
 void
 commitpopup(struct wl_listener *listener, void *data)
 {
@@ -1517,6 +1559,12 @@ commitpopup(struct wl_listener *listener, void *data)
 	if ((l && !l->mon) || (c && !c->mon)) {
 		wlr_xdg_popup_destroy(popup);
 		return;
+	}
+	if (type != LayerShell) {
+		PopupHook *h = ecalloc(1, sizeof(*h));
+
+		LISTEN(&popup->base->surface->events.commit, &h->commit, popup_hook_commit);
+		LISTEN(&popup->base->surface->events.destroy, &h->destroy, popup_hook_destroy);
 	}
 	box = type == LayerShell ? l->mon->m : c->mon->w;
 	box.x -= (type == LayerShell ? l->scene->node.x : c->geom.x);
@@ -2814,6 +2862,7 @@ setup(void)
 
 	load_dnx_config();
 	apply_runtime_modkey();
+	solux_cfgwatch_init();
 
 	
 

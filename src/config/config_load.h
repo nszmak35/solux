@@ -574,6 +574,99 @@ load_dnx_config(void)
 	dnx_add_builtin_tty_keys();
 }
 
+/* A reload must not change the layout that is in use right now: the layout
+ * from the monitor rules is only for entering solux. The layouts of every
+ * monitor and tag are remembered before the configuration is re-read and put
+ * back afterwards (matched by their arrange function, as the layout table can
+ * be changed by the configuration). */
+typedef struct {
+	Monitor *m;
+	int valid;
+	void (*arr[2])(Monitor *);
+	int idx[2];
+	unsigned int sellt;
+	void (*parr[MAX_TAGS + 1][2])(Monitor *);
+	int pidx[MAX_TAGS + 1][2];
+	unsigned int psel[MAX_TAGS + 1];
+} SoluxLayoutSnap;
+
+static int
+solux_snap_layout_index(const Layout *lt)
+{
+	if (!lt || lt < layouts || lt >= layouts + LENGTH(layouts))
+		return -1;
+	return (int)(lt - layouts);
+}
+
+static const Layout *
+solux_snap_find_layout(void (*arr)(Monitor *), int oldidx)
+{
+	size_t i;
+
+	if (oldidx < 0)
+		return NULL;
+	if ((size_t)oldidx < layouts_len && layouts[oldidx].arrange == arr)
+		return &layouts[oldidx];
+	for (i = 0; i < layouts_len; i++)
+		if (layouts[i].arrange == arr)
+			return &layouts[i];
+	return NULL;
+}
+
+static void
+solux_snap_layouts_save(SoluxLayoutSnap *s, Monitor *m)
+{
+	size_t i, j;
+
+	memset(s, 0, sizeof(*s));
+	s->m = m;
+	for (j = 0; j < 2; j++) {
+		s->idx[j] = solux_snap_layout_index(m->lt[j]);
+		s->arr[j] = s->idx[j] >= 0 ? m->lt[j]->arrange : NULL;
+	}
+	s->sellt = m->sellt;
+	if (m->pertag) {
+		for (i = 0; i <= MAX_TAGS; i++) {
+			for (j = 0; j < 2; j++) {
+				s->pidx[i][j] = solux_snap_layout_index(m->pertag->ltidxs[i][j]);
+				s->parr[i][j] = s->pidx[i][j] >= 0 ? m->pertag->ltidxs[i][j]->arrange : NULL;
+			}
+			s->psel[i] = m->pertag->sellts[i];
+		}
+	}
+	s->valid = 1;
+}
+
+static void
+solux_snap_layouts_restore(const SoluxLayoutSnap *s, Monitor *m)
+{
+	const Layout *lt;
+	size_t i, j;
+
+	if (!s || !s->valid)
+		return;
+
+	for (j = 0; j < 2; j++) {
+		lt = solux_snap_find_layout(s->arr[j], s->idx[j]);
+		if (lt)
+			m->lt[j] = lt;
+	}
+	if (s->sellt <= 1)
+		m->sellt = s->sellt;
+
+	if (!m->pertag)
+		return;
+	for (i = 0; i <= MAX_TAGS; i++) {
+		for (j = 0; j < 2; j++) {
+			lt = solux_snap_find_layout(s->parr[i][j], s->pidx[i][j]);
+			if (lt)
+				m->pertag->ltidxs[i][j] = lt;
+		}
+		if (s->psel[i] <= 1)
+			m->pertag->sellts[i] = s->psel[i];
+	}
+}
+
 static void
 reload_config(const Arg *arg)
 {
@@ -587,6 +680,8 @@ reload_config(const Arg *arg)
 	const int old_smartgaps = smartgaps;
 	const int old_dwindle_spiral = dwindle_type && !strcasecmp(dwindle_type, "spiral");
 	bool animate_layout_reload;
+	SoluxLayoutSnap *snaps = NULL;
+	size_t nsnaps = 0;
 	(void)arg;
 
 	{
@@ -611,6 +706,17 @@ reload_config(const Arg *arg)
 		if (!dnx_validate_ff(defcfg, usrcfg)) {
 			fprintf(stderr, "solux: config.py contains an error; reload aborted; current configuration kept\n");
 			return;
+		}
+	}
+
+	nsnaps = wl_list_length(&mons);
+	if (nsnaps) {
+		snaps = calloc(nsnaps, sizeof(*snaps));
+		if (snaps) {
+			size_t k = 0;
+			wl_list_for_each(m, &mons, link)
+				if (k < nsnaps)
+					solux_snap_layouts_save(&snaps[k++], m);
 		}
 	}
 
@@ -756,21 +862,30 @@ reload_config(const Arg *arg)
 	reload_runtime_keymap();
 	reapply_pointer_config();
 
-	if (!layouts_len)
+	if (!layouts_len) {
+		free(snaps);
 		return;
+	}
 
 	wl_list_for_each(m, &mons, link) {
 		const Layout *oldlt = m->lt[m->sellt];
 		void (*oldarrange)(Monitor *) = oldlt ? oldlt->arrange : NULL;
 		float oldmfact = m->mfact;
 		int oldnmaster = m->nmaster;
+		bool layout_changed;
 		apply_monitor_rule(m);
+		if (snaps) {
+			size_t k;
+			for (k = 0; k < nsnaps; k++)
+				if (snaps[k].m == m)
+					solux_snap_layouts_restore(&snaps[k], m);
+		}
+		layout_changed = oldarrange != m->lt[m->sellt]->arrange;
 		if (oldlt != m->lt[m->sellt] || oldmfact != m->mfact ||
-			oldnmaster != m->nmaster ||
-			oldarrange != m->lt[m->sellt]->arrange)
+			oldnmaster != m->nmaster || layout_changed)
 			animate_layout_reload = true;
 
-		if (m->lt[m->sellt]->arrange) {
+		if (layout_changed && m->lt[m->sellt]->arrange) {
 			Client *c;
 			wl_list_for_each(c, &clients, link) {
 				if (c->mon != m || !c->isfloating || c->isfullscreen)
@@ -863,6 +978,7 @@ reload_config(const Arg *arg)
 			c->isnoanimation = 0;
 		}
 	}
+	free(snaps);
 	fprintf(stderr, "solux: config.py reloaded\n");
 }
 

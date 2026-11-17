@@ -468,6 +468,7 @@ nfloat_apply_canvas_client(Client *c, struct wlr_box visual, double zoom)
 	d.scale_y = (double)MAX(1, visual.height - 2 * bwz) / (double)MAX(1, d.clip.height);
 	c->canvas_scale_x = d.scale_x;
 	c->canvas_scale_y = d.scale_y;
+	c->canvas_bwz = bwz;
 
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 	wlr_scene_node_for_each_buffer(&c->scene_surface->node,
@@ -490,6 +491,7 @@ nfloat_restore_canvas_client(Client *c)
 	client_get_clip(c, &d.clip);
 	c->canvas_scale_x = 1.0;
 	c->canvas_scale_y = 1.0;
+	c->canvas_bwz = (int)c->bw;
 
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 	wlr_scene_node_for_each_buffer(&c->scene_surface->node,

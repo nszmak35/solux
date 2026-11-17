@@ -250,6 +250,20 @@ static void solux_animation_child_apply(struct wlr_scene_buffer *b, struct wlr_s
 			(int)lround(sub->current.x * kx), (int)lround(sub->current.y * ky));
 }
 
+/* Puts a surface buffer back to its own size and, for a subsurface, its own
+ * position. Used whenever no scaling is wanted (1:1), so a client whose root
+ * surface is larger than the tile (Firefox keeps extra margins / its content
+ * in a subsurface) is never squeezed to the size of the window. */
+static void solux_animation_buffer_natural(struct wlr_scene_buffer *b, struct wlr_surface *surface)
+{
+	struct wlr_subsurface *sub = wlr_subsurface_try_from_wlr_surface(surface);
+
+	if (surface->current.width > 0 && surface->current.height > 0)
+		wlr_scene_buffer_set_dest_size(b, surface->current.width, surface->current.height);
+	if (sub && b->node.parent)
+		wlr_scene_node_set_position(&b->node.parent->node, sub->current.x, sub->current.y);
+}
+
 static void animation_buffer_scale_apply(struct wlr_scene_buffer *b, int32_t sx, int32_t sy, void *data)
 {
 	BufferData *bd = data;
@@ -265,6 +279,12 @@ static void animation_buffer_scale_apply(struct wlr_scene_buffer *b, int32_t sx,
 
 	if (wlr_xdg_popup_try_from_wlr_surface(surface) != NULL)
 		return;
+
+	if (bd->should_scale && bd->width_scale == 1.0f && bd->height_scale == 1.0f) {
+		solux_animation_buffer_natural(b, surface);
+		wlr_scene_buffer_set_corner_radii(b, bd->corner_location);
+		return;
+	}
 
 	if (bd->follow_root && bd->root && bd->should_scale &&
 		surface != bd->root && wlr_subsurface_try_from_wlr_surface(surface) != NULL &&

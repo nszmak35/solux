@@ -333,9 +333,14 @@ client_set_size(Client *c, uint32_t width, uint32_t height)
 		return 0;
 	}
 #endif
-	if (width == (uint32_t)c->surface.xdg->toplevel->current.width &&
-		height == (uint32_t)c->surface.xdg->toplevel->current.height)
+	/* Skip only when this very size was already asked for. Comparing with the
+	 * current (acknowledged) size alone drops a request that goes back to the
+	 * old size while another one is still pending, and the client (Firefox)
+	 * is left with a stale size and an empty strip next to it. */
+	if (width == (uint32_t)c->cfg_w && height == (uint32_t)c->cfg_h)
 		return 0;
+	c->cfg_w = (int32_t)width;
+	c->cfg_h = (int32_t)height;
 	return wlr_xdg_toplevel_set_size(c->surface.xdg->toplevel, width, height);
 }
 

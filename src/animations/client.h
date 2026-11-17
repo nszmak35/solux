@@ -325,6 +325,13 @@ static void solux_client_start_move(Client *c, struct wlr_box target)
 	}
 	if (c->animation.running && wlr_box_equal(&c->animation.target, &target))
 		return;
+	/* Nothing to animate (a focus change or a plain commit of the client
+	 * re-runs resize() with an unchanged geometry): do not start a move. */
+	if (!c->animation.running && wlr_box_equal(&c->animation.current, &target)) {
+		c->animation.target = target;
+		wlr_scene_node_set_position(&c->scene->node, target.x, target.y);
+		return;
+	}
 	c->animation.action = SOLUX_ANIM_MOVE;
 	c->animation.duration = animation_duration_move;
 	c->animation.initial = c->animation.running ? c->animation.current : c->animation.current;

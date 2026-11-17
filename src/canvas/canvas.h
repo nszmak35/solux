@@ -494,17 +494,14 @@ solux_canvas_apply(Monitor *m)
 #define SOLUX_TEXT_SCALE_SETTLE_MS 250
 #define SOLUX_TEXT_SCALE_PER_FRAME 2
 
+/* The buffer scale of windows stays at the output scale at every zoom level: clients never
+ * re-render their text when the canvas is zoomed, the compositor just scales the buffer
+ * (like in progressive). */
 static double
 solux_canvas_text_mult(double zoom)
 {
-	static const double levels[] = { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0 };
-	const size_t n = sizeof(levels) / sizeof(levels[0]);
-	size_t i;
-
-	for (i = 0; i < n; i++)
-		if (levels[i] >= zoom / 1.12)
-			return levels[i];
-	return levels[n - 1];
+	(void)zoom;
+	return 1.0;
 }
 
 static void

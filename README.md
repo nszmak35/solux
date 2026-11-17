@@ -31,7 +31,7 @@ Python file and controlled at runtime with `soluxctl`.
     ├── util.c, util.h      small utilities
     ├── animations/         animation core, per-client animations, tag switch animation
     ├── canvas/             float-layout canvas (camera, zoom, coordinate conversion)
-    ├── config/             configuration helpers, scalar settings, loading and reloading
+    ├── config/             configuration helpers, scalar settings, loading, reloading and file watching
     ├── effects/            borders, corner radius, shadow, blur and opacity
     ├── ext_workspace/      ext-workspace-v1 implementation
     ├── gestures/           touchpad gestures
@@ -109,7 +109,7 @@ autostart = [
 ]
 ```
 
-Reload the configuration with the `reload_config` action or `soluxctl reconfig`.
+Reload the configuration with the `reload_config` action or `soluxctl reconfig`. The configuration is also reloaded automatically as soon as `config.py` is saved (a broken file is rejected and the current settings are kept).
 
 ### Corner radius, borders and shadows
 
