@@ -496,7 +496,7 @@ solux_canvas_apply(Monitor *m)
 
 /* The buffer scale of windows stays at the output scale at every zoom level: clients never
  * re-render their text when the canvas is zoomed, the compositor just scales the buffer
- * (like in progressive). */
+ */
 static double
 solux_canvas_text_mult(double zoom)
 {

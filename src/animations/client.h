@@ -157,6 +157,14 @@ static void solux_client_restore_open_clip(Client *c)
 		!client_surface(c)->mapped)
 		return;
 	client_get_clip(c, &clip);
+	/* A clip equal to the one already set may not make wlroots recompute the
+	 * buffer sizes, so nudge it first: that drops whatever size an animation
+	 * left on the buffers. */
+	{
+		struct wlr_box nudge = clip;
+		nudge.width++;
+		wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &nudge);
+	}
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 }
 
@@ -318,20 +326,18 @@ static void solux_client_start_open(Client *c)
 static void solux_client_start_move(Client *c, struct wlr_box target)
 {
 	if (!c || !c->mon || !animations || c->isnoanimation || c->isfullscreen) {
+		int was_running = c->animation.running;
+
 		c->animation.running = false;
 		c->animation.current = c->animation.target = target;
 		wlr_scene_node_set_position(&c->scene->node, target.x, target.y);
+		/* An interrupted animation must not leave scaled buffers behind. */
+		if (was_running && c->scene_surface)
+			solux_client_restore_open_clip(c);
 		return;
 	}
 	if (c->animation.running && wlr_box_equal(&c->animation.target, &target))
 		return;
-	/* Nothing to animate (a focus change or a plain commit of the client
-	 * re-runs resize() with an unchanged geometry): do not start a move. */
-	if (!c->animation.running && wlr_box_equal(&c->animation.current, &target)) {
-		c->animation.target = target;
-		wlr_scene_node_set_position(&c->scene->node, target.x, target.y);
-		return;
-	}
 	c->animation.action = SOLUX_ANIM_MOVE;
 	c->animation.duration = animation_duration_move;
 	c->animation.initial = c->animation.running ? c->animation.current : c->animation.current;
