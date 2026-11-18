@@ -144,6 +144,7 @@ dwl-ipc protocol. Tag and layout names come from the running compositor, so they
 
 ```
 soluxctl help
+soluxctl reconfig
 soluxctl set-workspace <name_tag>
 soluxctl set-layout [layout]
 soluxctl set-kblayout
