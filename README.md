@@ -144,7 +144,6 @@ dwl-ipc protocol. Tag and layout names come from the running compositor, so they
 
 ```
 soluxctl help
-soluxctl reconfig
 soluxctl set-workspace <name_tag>
 soluxctl set-layout [layout]
 soluxctl set-kblayout
@@ -158,7 +157,6 @@ soluxctl watch-all
 
 | Command | What it does |
 | --- | --- |
-| `reconfig` | Reloads the configuration. |
 | `set-workspace <name_tag>` | Switches the active monitor to the tag with this name (a name from `tags` in `config.py`). |
 | `set-layout <layout>` | Switches the window layout of the active monitor by its name: a key of the `layouts` dictionary in `config.py`. Matching ignores case and surrounding brackets, so `monocle` and `'[ monocle ]'` are the same. An unknown name is an error. |
 | `set-layout` | Without an argument, cycles through the `layouts` dictionary of `config.py` in its order, wrapping around at the end. |
