@@ -109,7 +109,7 @@ autostart = [
 ]
 ```
 
-The configuration is also reloaded automatically as soon as `config.py` is saved (a broken file is rejected and the current settings are kept).
+Reload the configuration with the `reload_config` action or `soluxctl reconfig`. The configuration is also reloaded automatically as soon as `config.py` is saved (a broken file is rejected and the current settings are kept).
 
 ### Corner radius, borders and shadows
 
